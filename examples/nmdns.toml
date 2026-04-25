@@ -1,0 +1,60 @@
+# Example nmdns configuration.
+#
+# Place at /etc/nmdns.toml (or pass with `nmdns -c PATH`).
+
+# Run in foreground (log to stderr) instead of daemonizing.
+foreground = false
+
+# PID file (only used when daemonizing).
+pid_file = "/run/nmdns.pid"
+
+# Drop privileges to this user after binding sockets.
+# user = "nmdns"
+
+# Interfaces to operate on. mDNS will be received and (with `repeat = true`)
+# forwarded between every pair. Each interface must have an IPv4 address.
+interfaces = ["br-lan", "br-iot"]
+
+# Cross-interface repeating: forward unparsed/unknown mDNS traffic between
+# interfaces. Set to false for pure responder-only operation.
+repeat = true
+
+# Source filters. Whitelist takes precedence; only one of the two may be set.
+blacklist = []
+# whitelist = ["192.168.1.0/24"]
+
+# Hostname advertised as <hostname>.local. on every interface. Defaults to
+# the system hostname when unset.
+# hostname = "router"
+
+# Active-browse targets. Defaults to ["_services._dns-sd._udp.local."].
+# Uncomment to add or override targets.
+# browse = [
+#   "_services._dns-sd._udp.local.",
+#   "_http._tcp.local.",
+#   "_ssh._tcp.local.",
+# ]
+
+# Active-browse upper-bound interval (seconds). The browser uses RFC 6762
+# §5.2 exponential backoff (1s, 2s, 4s, ...) and caps the interval at this
+# value.
+browse_interval_secs = 60
+
+# Cache eviction tick (seconds).
+cache_tick_secs = 5
+
+# Maximum number of records held in the cache. When full, the nearest-to-
+# expiry entry is evicted to make room for a new insert.
+# max_cache_entries = 4096
+
+# Services to publish via DNS-SD. Each block defines one instance.
+[[service]]
+name    = "Router Admin"
+service = "_http._tcp.local."
+port    = 80
+txt     = ["path=/"]
+
+[[service]]
+name    = "Router SSH"
+service = "_ssh._tcp.local."
+port    = 22

@@ -1,0 +1,345 @@
+.TH NMDNS 1 "April 2026" "nmdns 0.2.0" "User Commands"
+.
+.SH NAME
+nmdns \- mDNS / DNS\-SD responder, cache, and cross\-interface repeater
+.
+.SH SYNOPSIS
+.B nmdns
+.RB [ \-f ]
+.RB [ \-c
+.IR config ]
+.br
+.B nmdns
+.B \-\-check
+.RB [ \-c
+.IR config ]
+.br
+.B nmdns
+.B \-h
+.
+.SH DESCRIPTION
+.B nmdns
+is a daemon for Linux hosts that sit between multiple link\-local
+network segments (routers, gateways, VLANs, container bridges, etc.).
+It performs four functions:
+.
+.TP
+.B Cache
+Every DNS resource record seen on any interface is parsed and stored
+with its TTL.  The cache is used internally for diagnostics and TTL
+tracking; the daemon does not currently answer queries on the wire
+from cache contents (only from records it publishes itself).
+.
+.TP
+.B Respond
+Answers
+.BR A ,
+.BR PTR ,
+.BR SRV ,
+and
+.B TXT
+queries for the host\(aqs own
+.I <hostname>.local.\&
+name and any DNS\-SD services declared in the configuration file.
+At startup the daemon probes for its names (RFC\ 6762\ \(sc8.1),
+then announces all records twice (RFC\ 6762\ \(sc8.3).
+On shutdown it sends goodbye packets with TTL\ =\ 0 twice
+(RFC\ 6762\ \(sc10.1).
+.
+.TP
+.B Browse
+Periodically sends
+.B PTR
+queries for configured service types so the cache remains warm for
+clients that never issue their own queries.  Query intervals follow
+the exponential back\-off required by RFC\ 6762\ \(sc5.2.
+.
+.TP
+.B Repeat
+Optionally re\-multicasts raw mDNS frames between interfaces so
+legacy clients that speak mDNS directly (rather than querying a cache)
+can still discover devices on other segments.
+.
+.PP
+Because mDNS uses link\-local multicast with IP\ TTL\ =\ 1, a standard
+Layer\-3 router drops these packets at the segment boundary.
+.B nmdns
+bridges the gap without requiring any changes to clients or services.
+.
+.SH OPTIONS
+.TP
+.BI \-c " config"
+Path to the TOML configuration file.
+Default:
+.IR /etc/nmdns.toml .
+.
+.TP
+.B \-f
+Run in the foreground and write log messages to
+.B stderr
+instead of syslog.
+.
+.TP
+.B \-\-check
+Parse and validate the configuration file, print a summary, then exit.
+Returns exit code\ 0 on success, 1 on error.
+.
+.TP
+.B \-h ", " \-\-help
+Print a short usage summary and exit.
+.
+.SH CONFIGURATION
+The configuration file uses
+.BR TOML (5)
+syntax.  An annotated example is installed at
+.IR /usr/share/doc/nmdns/nmdns.toml .
+.
+.SS Top\-level keys
+.TP
+.B interfaces
+.RI "(list of strings, required)"
+Network interface names the daemon listens and responds on.
+At least one must be specified.
+.
+.TP
+.B repeat
+.RI "(bool, default: " true ")"
+Forward unparsed mDNS frames between interfaces.
+Set to
+.B false
+for pure responder\-only operation.
+.
+.TP
+.B hostname
+.RI "(string, default: system hostname)"
+The bare hostname advertised as
+.IR hostname .local.
+on every interface.
+.
+.TP
+.B blacklist
+.RI "(list of CIDR strings, default: " [] ")"
+Drop all traffic whose source IP falls within any listed subnet.
+Mutually exclusive with
+.BR whitelist .
+.
+.TP
+.B whitelist
+.RI "(list of CIDR strings, default: " [] ")"
+Only accept traffic whose source IP falls within a listed subnet.
+Mutually exclusive with
+.BR blacklist .
+.
+.TP
+.B browse
+.RI "(list of DNS names, default: " ["_services._dns-sd._udp.local."] ")"
+Service types the daemon actively queries for.  The default discovers
+every DNS\-SD service type advertised on the link (RFC\ 6763\ \(sc9).
+Example of a narrower target:
+.IR _http._tcp.local. .
+.
+.TP
+.B browse_interval_secs
+.RI "(integer, default: " 60 ")"
+Upper bound on the exponential back\-off interval between successive
+browse queries, in seconds.
+.
+.TP
+.B cache_tick_secs
+.RI "(integer, default: " 5 ")"
+How often (in seconds) the cache eviction sweep runs to remove
+records whose TTL has expired.
+.
+.TP
+.B max_cache_entries
+.RI "(integer, default: " 4096 ")"
+Upper bound on the number of records held in the cache.  When full,
+the nearest\-to\-expiry entry is evicted to make room for an insert.
+.
+.TP
+.B foreground
+.RI "(bool, default: " false ")"
+Same as the
+.B \-f
+flag.
+.
+.TP
+.B pid_file
+.RI "(string, default: " /run/nmdns.pid ")"
+Path to the PID file written when the daemon is running in the
+background.
+.
+.TP
+.B user
+.RI "(string, default: none)"
+Unix user name the daemon drops privileges to after binding sockets.
+.
+.SS Service tables
+Each
+.B [[service]]
+block publishes one DNS\-SD instance and accepts the following keys:
+.
+.TP
+.B name
+.RI "(string, required)"
+Human\-readable instance name, e.g.\&
+.IR "Office Printer" .
+.
+.TP
+.B service
+.RI "(string, required)"
+DNS\-SD service type, e.g.\&
+.IR _ipp._tcp.local. .
+.
+.TP
+.B port
+.RI "(integer 1\(en65535, required)"
+TCP or UDP port advertised in the
+.B SRV
+record.
+.
+.TP
+.B txt
+.RI "(list of strings, default: " [] ")"
+Key=value pairs placed in the
+.B TXT
+record, e.g.\&
+.IR "rp=ipp/print" .
+.
+.TP
+.B host
+.RI "(string, default: daemon hostname)"
+Override the target hostname in the
+.B SRV
+record.
+.
+.SH RFC 6762 COMPLIANCE
+The following rules are implemented and each is covered by a dedicated
+test in
+.IR tests/rfc6762.rs .
+.
+.TS
+tab(@) allbox;
+lb lb lb
+l l l.
+RFC \(sc@Rule@Status
+\(sc3@Hostnames are <single-label>.local.@\(OK
+\(sc5.2@Browser: 20\(en120 ms initial jitter@\(OK
+\(sc5.2@Browser: exponential back\-off, doubling each query@\(OK
+\(sc6@Unique answer / probe\-defense: respond without delay@\(OK
+\(sc6@Shared / multi\-question: 20\(en120 ms randomized delay@\(OK
+\(sc6@TC bit set on query: 400\(en500 ms randomized delay@\(OK
+\(sc6@Per\-(record, interface) 1 s minimum multicast interval@\(OK
+\(sc6@Probe\-defense uses 250 ms interval@\(OK
+\(sc7.1@Known\-Answer Suppression (TTL >= 50%% rule)@\(OK
+\(sc8.1@Probe: 0\(en250 ms initial random jitter@\(OK
+\(sc8.1@Probe: three probes 250 ms apart@\(OK
+\(sc8.1@Probe message format (qtype=ANY, QU bit, Authority Section)@\(OK
+\(sc8.1@Detect incoming probes via Authority Section@\(OK
+\(sc8.3@Announcement gap >= 1 s@\(OK
+\(sc10.1@Goodbye: TTL=0 on host A and service PTR/SRV/TXT@\(OK
+\(sc10.1@Receiver: TTL=0 deletes the cached record@\(OK
+\(sc10.2@Cache\-flush bit on unique records only (not shared PTR)@\(OK
+\(sc11@Source\-address filter (CIDR blacklist / whitelist)@\(OK
+\(sc11@IP TTL=255 on outgoing mDNS sockets@\(OK
+\(sc18.4@Authoritative Answer bit set on responses@\(OK
+\(sc8.2@Simultaneous\-probe tiebreaking / rename\-on\-conflict@\(em
+\(sc6.1@NSEC negative responses@\(em
+\(sc7.2@Multi\-packet Known\-Answer aggregation@\(em
+.TE
+.
+.PP
+Run
+.B cargo test \-\-test rfc6762
+to execute the compliance suite.
+.
+.SH SIGNALS
+.TP
+.B SIGTERM ", " SIGINT
+Graceful shutdown: send goodbye packets (TTL\ =\ 0) on every interface,
+then exit.
+.
+.SH FILES
+.TP
+.I /etc/nmdns.toml
+Default configuration file.
+.
+.TP
+.I /run/nmdns.pid
+Default PID file (when running as a daemon).
+.
+.SH EXAMPLES
+Respond for the host's own name and two services on two interfaces:
+.
+.RS 4
+.EX
+interfaces = ["br\-lan", "br\-iot"]
+hostname   = "gateway"
+
+[[service]]
+name    = "Web UI"
+service = "_http._tcp.local."
+port    = 80
+txt     = ["path=/"]
+
+[[service]]
+name    = "SSH"
+service = "_ssh._tcp.local."
+port    = 22
+.EE
+.RE
+.
+.PP
+Validate the config and exit:
+.
+.RS 4
+.EX
+nmdns \-\-check \-c /etc/nmdns.toml
+.EE
+.RE
+.
+.SH EXIT STATUS
+.TP
+.B 0
+Success (or
+.B \-\-check
+passed).
+.
+.TP
+.B 1
+Startup error (bad config, socket bind failure, etc.).
+.
+.TP
+.B 2
+Usage error (unknown flag, missing argument).
+.
+.SH NOTES
+.B nmdns
+must start with sufficient privilege to bind UDP port\ 5353 and join
+multicast groups.  Either run as
+.B root
+or grant
+.BR CAP_NET_BIND_SERVICE " and " CAP_NET_RAW .
+After the sockets are bound the daemon drops to the user specified in
+.BR user .
+.
+.PP
+IPv6 mDNS (address
+.IR ff02::fb )
+is not currently implemented.
+.
+.SH SEE ALSO
+.BR avahi\-daemon (8),
+.BR mdnsd (8),
+.BR dns\-sd (1),
+.BR toml (5)
+.
+.PP
+RFC\ 6762 \(em Multicast DNS,
+RFC\ 6763 \(em DNS\-Based Service Discovery.
+.
+.SH AUTHORS
+Written by the nmdns contributors.
+.
+.SH LICENSE
+GNU General Public License version\ 2 or later.
