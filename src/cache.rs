@@ -1,10 +1,11 @@
 //! mDNS record cache.
 //!
 //! Stores resource records observed on the wire keyed by `(name, type,
-//! rdata)` and tracks per-record TTL. A periodic [`Cache::evict_expired`]
-//! sweep removes entries past their deadline, and an upper bound on the
-//! number of entries protects the daemon from a malicious peer flooding
-//! the link with bogus records (RFC 6762 §16).
+//! rdata)` and tracks per-record TTL plus the interface where each record
+//! was learned. A periodic [`Cache::evict_expired`] sweep removes entries
+//! past their deadline, and an upper bound on the number of entries protects
+//! the daemon from a malicious peer flooding the link with bogus records
+//! (RFC 6762 §16).
 
 use std::collections::HashMap;
 use std::sync::Mutex;
@@ -37,6 +38,7 @@ pub enum InsertOutcome {
 pub struct Entry {
     pub record: Record,
     pub deadline: Instant,
+    pub source_ifindex: Option<u32>,
 }
 
 pub struct Cache {
@@ -62,13 +64,18 @@ impl Cache {
         }
     }
 
+    /// Insert (or refresh) a record without source-interface metadata.
+    pub fn insert(&self, record: Record) -> InsertOutcome {
+        self.insert_from(record, None)
+    }
+
     /// Insert (or refresh) a record. TTL=0 deletes the matching entry per
     /// RFC 6762 §10.1 ("goodbye" packet).
     ///
     /// When the cache is at capacity the soonest-to-expire entry is
     /// evicted to make room; if no entries are close to expiring the new
     /// record is rejected. This bounds memory growth from a hostile peer.
-    pub fn insert(&self, record: Record) -> InsertOutcome {
+    pub fn insert_from(&self, record: Record, source_ifindex: Option<u32>) -> InsertOutcome {
         let key = RecordKey::of(&record);
         let ttl = record.ttl;
         let mut g = self.inner.lock().unwrap();
@@ -85,7 +92,12 @@ impl Cache {
 
         use std::collections::hash_map::Entry as HEntry;
         if let HEntry::Occupied(mut e) = g.by_key.entry(key.clone()) {
-            e.insert(Entry { record, deadline });
+            let source_ifindex = source_ifindex.or(e.get().source_ifindex);
+            e.insert(Entry {
+                record,
+                deadline,
+                source_ifindex,
+            });
             return InsertOutcome::Refreshed;
         }
 
@@ -109,7 +121,14 @@ impl Cache {
             }
         }
 
-        g.by_key.insert(key, Entry { record, deadline });
+        g.by_key.insert(
+            key,
+            Entry {
+                record,
+                deadline,
+                source_ifindex,
+            },
+        );
         InsertOutcome::Inserted
     }
 
@@ -131,27 +150,69 @@ impl Cache {
         before - g.by_key.len()
     }
 
-    /// Snapshot all live records of a given (name, type) — used by the
-    /// responder when asked to answer queries from cached data.
+    /// Snapshot all live records of a given (name, type). `ANY` matches all
+    /// record types for the name. Returned records have TTLs reduced to the
+    /// remaining lifetime at lookup time.
     pub fn lookup(&self, name: &Name, rtype: RecordType) -> Vec<Record> {
+        self.lookup_inner(name, rtype, |_| true)
+    }
+
+    /// Snapshot live records for `name`/`rtype` that were learned on a
+    /// different interface than `arrival_ifindex`.
+    pub fn lookup_from_other_ifaces(
+        &self,
+        name: &Name,
+        rtype: RecordType,
+        arrival_ifindex: u32,
+    ) -> Vec<Record> {
+        self.lookup_inner(name, rtype, |e| {
+            matches!(e.source_ifindex, Some(source_ifindex) if source_ifindex != arrival_ifindex)
+        })
+    }
+
+    fn lookup_inner<F>(&self, name: &Name, rtype: RecordType, source_filter: F) -> Vec<Record>
+    where
+        F: Fn(&Entry) -> bool,
+    {
+        let now = Instant::now();
         let g = self.inner.lock().unwrap();
         g.by_key
             .values()
-            .filter(|e| &e.record.name == name && e.record.record_type() == rtype)
-            .map(|e| e.record.clone())
+            .filter(|e| record_matches(&e.record, name, rtype) && source_filter(e))
+            .filter_map(|e| record_with_remaining_ttl(e, now))
             .collect()
     }
 
     /// Iterate every cached record (snapshot). For diagnostics only.
     pub fn snapshot(&self) -> Vec<Record> {
+        let now = Instant::now();
         self.inner
             .lock()
             .unwrap()
             .by_key
             .values()
-            .map(|e| e.record.clone())
+            .filter_map(|e| record_with_remaining_ttl(e, now))
             .collect()
     }
+}
+
+fn record_matches(record: &Record, name: &Name, rtype: RecordType) -> bool {
+    &record.name == name && (rtype == RecordType::ANY || record.record_type() == rtype)
+}
+
+fn record_with_remaining_ttl(entry: &Entry, now: Instant) -> Option<Record> {
+    let remaining = entry.deadline.checked_duration_since(now)?;
+    let mut ttl = remaining.as_secs();
+    if remaining.subsec_nanos() > 0 {
+        ttl = ttl.saturating_add(1);
+    }
+    if ttl == 0 {
+        return None;
+    }
+
+    let mut record = entry.record.clone();
+    record.ttl = ttl.min(u32::MAX as u64) as u32;
+    Some(record)
 }
 
 impl Default for Cache {

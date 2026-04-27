@@ -5,7 +5,8 @@
 //!
 //!  - Config parsing & validation (CIDR filters, mutually-exclusive lists,
 //!    defaults, every TOML knob)
-//!  - Cache lifecycle (insert / TTL=0 goodbye / TTL expiry / multi-rdata)
+//!  - Cache lifecycle (insert / TTL=0 goodbye / TTL expiry / multi-rdata /
+//!    cross-interface responder lookups)
 //!  - Service record building (host A, PTR type→instance, PTR meta,
 //!    SRV, TXT) and `Published::answer` matching for ANY/A/PTR/SRV/TXT
 //!  - `Published::host_a_for` per-iface filtering
@@ -76,6 +77,7 @@ fn config_minimal_uses_all_defaults() {
     let r = Resolved::parse(r#"interfaces = ["eth0"]"#).unwrap();
     assert_eq!(r.interfaces, vec!["eth0".to_string()]);
     assert!(r.repeat, "repeat defaults to true");
+    assert!(r.answer_from_cache, "cache responses default to true");
     assert!(r.hostname.is_none());
     assert_eq!(r.browse, vec!["_services._dns-sd._udp.local.".to_string()]);
     assert_eq!(r.browse_interval_secs, 60);
@@ -90,6 +92,7 @@ fn config_full_round_trip() {
     let toml = r#"
 interfaces           = ["br-lan", "br-iot"]
 repeat               = false
+answer_from_cache    = false
 blacklist            = ["10.0.0.0/8"]
 hostname             = "router"
 browse               = ["_http._tcp.local."]
@@ -106,6 +109,7 @@ host    = "router.local."
     let r = Resolved::parse(toml).unwrap();
     assert_eq!(r.interfaces.len(), 2);
     assert!(!r.repeat);
+    assert!(!r.answer_from_cache);
     assert_eq!(r.hostname.as_deref(), Some("router"));
     assert_eq!(r.browse_interval_secs, 30);
     assert_eq!(r.cache_tick_secs, 10);
@@ -235,6 +239,50 @@ fn cache_lookup_filters_by_type() {
     c.insert(a_record("foo.local.", 60, [1, 2, 3, 4]));
     let hits = c.lookup(&host("foo.local."), RecordType::AAAA);
     assert!(hits.is_empty());
+}
+
+#[test]
+fn cache_lookup_any_returns_all_types_for_name() {
+    let c = Cache::new();
+    c.insert(a_record("foo.local.", 60, [1, 2, 3, 4]));
+    c.insert(Record::from_rdata(
+        host("foo.local."),
+        60,
+        RData::TXT(TXT::new(vec!["k=v".into()])),
+    ));
+    let hits = c.lookup(&host("foo.local."), RecordType::ANY);
+    assert_eq!(hits.len(), 2);
+}
+
+#[test]
+fn cache_lookup_from_other_ifaces_excludes_arrival_iface() {
+    let c = Cache::new();
+    c.insert_from(a_record("iot.local.", 60, [192, 168, 20, 50]), Some(20));
+
+    let trusted_hits = c.lookup_from_other_ifaces(&host("iot.local."), RecordType::A, 10);
+    assert_eq!(trusted_hits.len(), 1);
+
+    let iot_hits = c.lookup_from_other_ifaces(&host("iot.local."), RecordType::A, 20);
+    assert!(iot_hits.is_empty());
+}
+
+#[test]
+fn cache_lookup_ignores_records_without_source_iface_for_cross_iface_answers() {
+    let c = Cache::new();
+    c.insert(a_record("unknown.local.", 60, [1, 2, 3, 4]));
+
+    let hits = c.lookup_from_other_ifaces(&host("unknown.local."), RecordType::A, 10);
+    assert!(hits.is_empty());
+}
+
+#[test]
+fn cache_lookup_returns_remaining_ttl() {
+    let c = Cache::new();
+    c.insert(a_record("foo.local.", 60, [1, 2, 3, 4]));
+    let hits = c.lookup(&host("foo.local."), RecordType::A);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].ttl <= 60);
+    assert!(hits[0].ttl > 0);
 }
 
 // --------------------------------------------------------------------

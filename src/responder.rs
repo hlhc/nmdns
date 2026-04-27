@@ -2,14 +2,16 @@
 //! timing rules of RFC 6762 §6, §6.3, §7.1 (Known-Answer Suppression),
 //! §8.1 (Probing), §8.3 (Announcing), and §10.1 (Goodbye).
 
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::rr::{DNSClass, Name, Record, RecordType};
+use hickory_proto::rr::rdata::PTR;
+use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 use tokio::time::sleep;
 
 use crate::iface::Iface;
-use crate::record_key::rdata_eq;
+use crate::record_key::{rdata_eq, RecordKey};
 use crate::services::Published;
 use crate::state::State;
 use crate::timing::{
@@ -18,7 +20,7 @@ use crate::timing::{
 };
 
 /// Build a response message. Returns `None` if there are no answers.
-fn build_response(query_id: u16, answers: &[Record]) -> Option<Vec<u8>> {
+fn build_response(query_id: u16, answers: &[Record], additionals: &[Record]) -> Option<Vec<u8>> {
     if answers.is_empty() {
         return None;
     }
@@ -26,6 +28,9 @@ fn build_response(query_id: u16, answers: &[Record]) -> Option<Vec<u8>> {
     msg.metadata.authoritative = true;
     for a in answers {
         msg.add_answer(a.clone());
+    }
+    for a in additionals {
+        msg.add_additional(a.clone());
     }
     msg.to_vec().ok()
 }
@@ -65,6 +70,130 @@ pub fn apply_known_answers(answers: &mut Vec<Record>, query_msg: &Message) {
     });
 }
 
+fn push_unique(out: &mut Vec<Record>, seen: &mut HashSet<RecordKey>, record: Record) {
+    if seen.insert(RecordKey::of(&record)) {
+        out.push(record);
+    }
+}
+
+fn candidate_answers(
+    state: &Arc<State>,
+    msg: &Message,
+    arrival: &Arc<Iface>,
+    pub_records: &Published,
+) -> Vec<Record> {
+    let mut answers = Vec::new();
+    let mut seen = HashSet::new();
+
+    for q in &msg.queries {
+        for r in pub_records.answer(q.name(), q.query_type()) {
+            // Strip out non-local-iface host A records.
+            if r.record_type() == RecordType::A
+                && !pub_records
+                    .host_a_for(arrival.addr)
+                    .iter()
+                    .any(|hr| hr == &r)
+            {
+                continue;
+            }
+            push_unique(&mut answers, &mut seen, r);
+        }
+
+        if state.config.answer_from_cache {
+            for r in state
+                .cache
+                .lookup_from_other_ifaces(q.name(), q.query_type(), arrival.ifindex)
+            {
+                push_unique(&mut answers, &mut seen, r);
+            }
+        }
+    }
+
+    answers
+}
+
+fn add_cached_records(
+    state: &Arc<State>,
+    name: &Name,
+    rtype: RecordType,
+    arrival_ifindex: u32,
+    out: &mut Vec<Record>,
+    seen: &mut HashSet<RecordKey>,
+) {
+    for record in state
+        .cache
+        .lookup_from_other_ifaces(name, rtype, arrival_ifindex)
+    {
+        push_unique(out, seen, record);
+    }
+}
+
+fn cached_additionals(state: &Arc<State>, answers: &[Record], arrival: &Arc<Iface>) -> Vec<Record> {
+    if !state.config.answer_from_cache {
+        return Vec::new();
+    }
+
+    let mut additionals = Vec::new();
+    let mut seen: HashSet<RecordKey> = answers.iter().map(RecordKey::of).collect();
+
+    for answer in answers {
+        if let RData::PTR(PTR(target)) = &answer.data {
+            add_cached_records(
+                state,
+                target,
+                RecordType::SRV,
+                arrival.ifindex,
+                &mut additionals,
+                &mut seen,
+            );
+            add_cached_records(
+                state,
+                target,
+                RecordType::TXT,
+                arrival.ifindex,
+                &mut additionals,
+                &mut seen,
+            );
+        }
+    }
+
+    let srv_records: Vec<Record> = answers
+        .iter()
+        .chain(additionals.iter())
+        .filter(|r| r.record_type() == RecordType::SRV)
+        .cloned()
+        .collect();
+
+    for record in srv_records {
+        if let RData::SRV(srv) = &record.data {
+            add_cached_records(
+                state,
+                &srv.target,
+                RecordType::A,
+                arrival.ifindex,
+                &mut additionals,
+                &mut seen,
+            );
+            add_cached_records(
+                state,
+                &srv.target,
+                RecordType::AAAA,
+                arrival.ifindex,
+                &mut additionals,
+                &mut seen,
+            );
+        }
+    }
+
+    additionals
+}
+
+fn answer_uniqueness(answers: &[Record]) -> (bool, bool) {
+    let any_unique = answers.iter().any(|r| r.mdns_cache_flush);
+    let all_unique = answers.iter().all(|r| r.mdns_cache_flush);
+    (all_unique, any_unique)
+}
+
 /// Inspect a parsed query message; respond on the iface it arrived on,
 /// honouring randomized response delays and per-record rate limiting.
 pub async fn handle_query(
@@ -80,30 +209,9 @@ pub async fn handle_query(
         return;
     }
 
-    // Gather candidate answers.
-    let mut answers: Vec<Record> = Vec::new();
-    let mut all_unique = true;
-    let mut any_unique = false;
-    for q in &msg.queries {
-        let recs = pub_records.answer(q.name(), q.query_type());
-        for r in recs {
-            // Strip out non-local-iface host A records.
-            if r.record_type() == RecordType::A
-                && !pub_records
-                    .host_a_for(arrival.addr)
-                    .iter()
-                    .any(|hr| hr == &r)
-            {
-                continue;
-            }
-            if r.mdns_cache_flush {
-                any_unique = true;
-            } else {
-                all_unique = false;
-            }
-            answers.push(r);
-        }
-    }
+    // Gather candidate answers from published records and, when enabled,
+    // from records learned on other interfaces.
+    let mut answers = candidate_answers(state, msg, arrival, pub_records);
 
     // RFC 6762 §7.1: Known-Answer Suppression.
     apply_known_answers(&mut answers, msg);
@@ -111,6 +219,9 @@ pub async fn handle_query(
     if answers.is_empty() {
         return;
     }
+
+    let mut additionals = cached_additionals(state, &answers, arrival);
+    let (all_unique, any_unique) = answer_uniqueness(&answers);
 
     // RFC 6762 §8.1/§8.2: a probe arrives as a query with the proposed
     // records in the Authority Section. Defenders MUST answer immediately.
@@ -143,8 +254,9 @@ pub async fn handle_query(
     };
     let ifindex = arrival.ifindex;
     answers.retain(|r| state.mc_tracker.check_and_mark(ifindex, r, min_iv));
+    additionals.retain(|r| state.mc_tracker.check_and_mark(ifindex, r, min_iv));
 
-    let bytes = match build_response(msg.metadata.id, &answers) {
+    let bytes = match build_response(msg.metadata.id, &answers, &additionals) {
         Some(b) => b,
         None => return,
     };
@@ -157,6 +269,7 @@ pub async fn handle_query(
         iface = %arrival.name,
         bytes = bytes.len(),
         answers = answers.len(),
+        additionals = additionals.len(),
         ?class,
         "answered query"
     );
@@ -300,10 +413,66 @@ pub async fn announce_goodbye(state: &Arc<State>, pub_records: &Published) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::rdata::{A, SRV, TXT};
     use hickory_proto::rr::RData;
     use std::net::Ipv4Addr;
     use std::str::FromStr;
+    use std::sync::OnceLock;
+    use tokio_util::sync::CancellationToken;
+
+    use crate::cache::Cache;
+    use crate::config::Resolved;
+    use crate::state::Metrics;
+
+    fn fake_iface(name: &str, ip: [u8; 4], ifindex: u32) -> Arc<Iface> {
+        static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
+        let rt = RT.get_or_init(|| {
+            tokio::runtime::Builder::new_current_thread()
+                .enable_all()
+                .build()
+                .expect("test runtime")
+        });
+        let std_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        std_sock.set_nonblocking(true).unwrap();
+        let send = rt.block_on(async { tokio::net::UdpSocket::from_std(std_sock).unwrap() });
+        let addr = Ipv4Addr::from(ip);
+        Arc::new(Iface {
+            name: name.into(),
+            ifindex,
+            addr,
+            mask: Ipv4Addr::new(255, 255, 255, 0),
+            net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
+            send,
+        })
+    }
+
+    fn test_state(ifaces: Vec<Arc<Iface>>, answer_from_cache: bool) -> Arc<State> {
+        let cfg = Resolved::parse(&format!(
+            r#"
+interfaces = ["test0"]
+answer_from_cache = {answer_from_cache}
+"#
+        ))
+        .unwrap();
+        Arc::new(State {
+            config: cfg,
+            ifaces,
+            cache: Cache::new(),
+            metrics: Metrics::default(),
+            shutdown: CancellationToken::new(),
+            mc_tracker: timing::MulticastTracker::new(),
+        })
+    }
+
+    fn query(name: &str, rtype: RecordType) -> Message {
+        let mut msg = Message::new(0, MessageType::Query, OpCode::Query);
+        let mut q = Query::new();
+        q.set_name(Name::from_str(name).unwrap())
+            .set_query_type(rtype)
+            .set_query_class(DNSClass::IN);
+        msg.add_query(q);
+        msg
+    }
 
     #[test]
     fn known_answer_suppresses_fresh_match() {
@@ -361,5 +530,90 @@ mod tests {
         q.set_name(name).set_query_type(RecordType::A);
         plain.add_query(q);
         assert!(!is_probe_for_us(&plain, &[unique]));
+    }
+
+    #[test]
+    fn cached_answers_only_use_records_from_other_ifaces() {
+        let trusted = fake_iface("trusted", [192, 168, 10, 1], 10);
+        let iot = fake_iface("iot", [192, 168, 20, 1], 20);
+        let state = test_state(vec![trusted.clone(), iot.clone()], true);
+        let published = Published {
+            hostname: Name::from_str("router.local.").unwrap(),
+            host_a: Vec::new(),
+            services: Vec::new(),
+        };
+        state.cache.insert_from(
+            Record::from_rdata(
+                Name::from_str("printer.local.").unwrap(),
+                120,
+                RData::A(A(Ipv4Addr::new(192, 168, 20, 50))),
+            ),
+            Some(iot.ifindex),
+        );
+
+        let msg = query("printer.local.", RecordType::A);
+        let trusted_answers = candidate_answers(&state, &msg, &trusted, &published);
+        assert_eq!(trusted_answers.len(), 1);
+
+        let iot_answers = candidate_answers(&state, &msg, &iot, &published);
+        assert!(iot_answers.is_empty());
+    }
+
+    #[test]
+    fn cached_ptr_answers_include_srv_txt_and_address_additionals() {
+        let trusted = fake_iface("trusted", [192, 168, 10, 1], 10);
+        let iot = fake_iface("iot", [192, 168, 20, 1], 20);
+        let state = test_state(vec![trusted.clone(), iot.clone()], true);
+        let published = Published {
+            hostname: Name::from_str("router.local.").unwrap(),
+            host_a: Vec::new(),
+            services: Vec::new(),
+        };
+
+        let service_type = Name::from_str("_ipp._tcp.local.").unwrap();
+        let instance = Name::from_str("Office-Printer._ipp._tcp.local.").unwrap();
+        let target = Name::from_str("printer.local.").unwrap();
+
+        state.cache.insert_from(
+            Record::from_rdata(
+                service_type.clone(),
+                4500,
+                RData::PTR(PTR(instance.clone())),
+            ),
+            Some(iot.ifindex),
+        );
+        state.cache.insert_from(
+            Record::from_rdata(
+                instance.clone(),
+                120,
+                RData::SRV(SRV::new(0, 0, 631, target.clone())),
+            ),
+            Some(iot.ifindex),
+        );
+        state.cache.insert_from(
+            Record::from_rdata(
+                instance,
+                4500,
+                RData::TXT(TXT::new(vec!["rp=ipp/print".into()])),
+            ),
+            Some(iot.ifindex),
+        );
+        state.cache.insert_from(
+            Record::from_rdata(target, 120, RData::A(A(Ipv4Addr::new(192, 168, 20, 50)))),
+            Some(iot.ifindex),
+        );
+
+        let msg = query("_ipp._tcp.local.", RecordType::PTR);
+        let answers = candidate_answers(&state, &msg, &trusted, &published);
+        let additionals = cached_additionals(&state, &answers, &trusted);
+
+        assert_eq!(answers.len(), 1);
+        assert!(additionals
+            .iter()
+            .any(|r| r.record_type() == RecordType::SRV));
+        assert!(additionals
+            .iter()
+            .any(|r| r.record_type() == RecordType::TXT));
+        assert!(additionals.iter().any(|r| r.record_type() == RecordType::A));
     }
 }

@@ -25,9 +25,9 @@ It performs four functions:
 .TP
 .B Cache
 Every DNS resource record seen on any interface is parsed and stored
-with its TTL.  The cache is used internally for diagnostics and TTL
-tracking; the daemon does not currently answer queries on the wire
-from cache contents (only from records it publishes itself).
+with its TTL.  The cache is used for diagnostics, TTL tracking, and
+cache\-backed responses on interfaces other than the one where the
+record was learned.
 .
 .TP
 .B Respond
@@ -135,6 +135,15 @@ Forward unparsed mDNS frames between interfaces.
 Set to
 .B false
 for pure responder\-only operation.
+.
+.TP
+.B answer_from_cache
+.RI "(bool, default: " true ")"
+Answer queries from records learned on another configured interface.
+This lets the daemon serve cache\-backed responses even when
+.B repeat
+is disabled; records are not answered back onto the same interface
+where they were learned.
 .
 .TP
 .B hostname
