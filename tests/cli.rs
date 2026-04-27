@@ -8,6 +8,7 @@
 use std::io::Write;
 
 use assert_cmd::Command;
+use nmdns::exit_code;
 use predicates::prelude::*;
 use tempfile::NamedTempFile;
 
@@ -60,7 +61,7 @@ fn unknown_argument_exits_two_and_shows_usage() {
         .arg("--bogus")
         .assert()
         .failure()
-        .code(2)
+        .code(exit_code::USAGE)
         .stderr(predicate::str::contains("unexpected argument"));
 }
 
@@ -70,22 +71,22 @@ fn dash_c_without_value_exits_two() {
         .arg("-c")
         .assert()
         .failure()
-        .code(2)
+        .code(exit_code::USAGE)
         .stderr(predicate::str::contains("a value is required"));
 }
 
 #[test]
-fn missing_config_file_exits_one() {
+fn missing_config_file_exits_config() {
     nmdns()
         .args(["-c", "/nonexistent/nmdns-test.toml", "--check"])
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("read config"));
 }
 
 #[test]
-fn invalid_toml_exits_one() {
+fn invalid_toml_exits_config() {
     let f = write_config("this is not = [valid toml");
     nmdns()
         .args(["-c"])
@@ -93,7 +94,7 @@ fn invalid_toml_exits_one() {
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("parse config"));
 }
 
@@ -106,7 +107,7 @@ fn empty_interfaces_rejected() {
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("at least one interface"));
 }
 
@@ -119,7 +120,7 @@ fn missing_interfaces_key_rejected() {
         .arg("--check")
         .assert()
         .failure()
-        .code(1);
+        .code(exit_code::CONFIG);
 }
 
 #[test]
@@ -137,7 +138,7 @@ whitelist  = ["192.168.1.0/24"]
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("mutually exclusive"));
 }
 
@@ -155,7 +156,7 @@ blacklist  = ["not-a-cidr"]
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("invalid subnet"));
 }
 
@@ -173,7 +174,7 @@ nonsense   = true
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("parse config"));
 }
 
@@ -196,7 +197,25 @@ extra_key = "boom"
         .arg("--check")
         .assert()
         .failure()
-        .code(1);
+        .code(exit_code::CONFIG);
+}
+
+#[test]
+fn invalid_browse_target_exits_config_validation() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+browse = ["aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.local."]
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .failure()
+        .code(exit_code::CONFIG_VALIDATION)
+        .stderr(predicate::str::contains("invalid browse target"));
 }
 
 #[test]
@@ -326,6 +345,6 @@ whitelist  = ["10.0.0.0/33"]
         .arg("--check")
         .assert()
         .failure()
-        .code(1)
+        .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("mask"));
 }

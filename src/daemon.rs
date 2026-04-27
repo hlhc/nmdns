@@ -54,7 +54,7 @@ fn redirect_stdio_to_devnull() -> io::Result<()> {
 /// *before* stdio is redirected so a failure is visible to the operator.
 pub fn daemonize(pid_file: &str) -> io::Result<()> {
     match unsafe { fork() }.map_err(io::Error::from)? {
-        ForkResult::Parent { .. } => process::exit(0),
+        ForkResult::Parent { .. } => process::exit(crate::exit_code::OK),
         ForkResult::Child => {}
     }
 

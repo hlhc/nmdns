@@ -10,7 +10,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use nmdns::config::Resolved;
-use nmdns::{daemon, engine, services};
+use nmdns::{daemon, engine, exit_code, services};
 
 /// mDNS responder, cache, and cross-interface repeater
 #[derive(Parser, Debug)]
@@ -68,7 +68,7 @@ fn main() {
         Ok(c) => c,
         Err(e) => {
             eprintln!("nmdns: {e}");
-            process::exit(1);
+            process::exit(exit_code::CONFIG);
         }
     };
 
@@ -79,12 +79,12 @@ fn main() {
         let hostname = services::resolve_hostname(&cfg.hostname);
         if let Err(e) = services::validate(&hostname, &cfg.services) {
             eprintln!("nmdns: {e}");
-            process::exit(1);
+            process::exit(exit_code::CONFIG_VALIDATION);
         }
         for b in &cfg.browse {
             if let Err(e) = hickory_proto::rr::Name::from_str(b) {
                 eprintln!("nmdns: invalid browse target {b}: {e}");
-                process::exit(1);
+                process::exit(exit_code::CONFIG_VALIDATION);
             }
         }
         println!(
@@ -93,7 +93,7 @@ fn main() {
             cfg.services.len(),
             cfg.browse.len(),
         );
-        process::exit(0);
+        process::exit(exit_code::OK);
     }
 
     let foreground = cli.foreground || cfg.foreground;
@@ -103,11 +103,11 @@ fn main() {
     if !foreground {
         if let Some(pid) = daemon::already_running(&cfg.pid_file) {
             eprintln!("nmdns: already running as pid {pid}");
-            process::exit(1);
+            process::exit(exit_code::ALREADY_RUNNING);
         }
         if let Err(e) = daemon::daemonize(&cfg.pid_file) {
             eprintln!("nmdns: daemonize: {e}");
-            process::exit(1);
+            process::exit(exit_code::DAEMONIZE);
         }
         wrote_pidfile = true;
     }
@@ -123,7 +123,7 @@ fn main() {
         Ok(rt) => rt,
         Err(e) => {
             eprintln!("nmdns: tokio runtime: {e}");
-            process::exit(1);
+            process::exit(exit_code::RUNTIME);
         }
     };
     let exit_code = rt.block_on(engine::run(cfg));

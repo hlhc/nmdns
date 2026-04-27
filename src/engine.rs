@@ -14,6 +14,7 @@ use tokio_util::sync::CancellationToken;
 
 use crate::cache::{Cache, InsertOutcome};
 use crate::config::Resolved;
+use crate::exit_code;
 use crate::iface::{self, Datagram};
 use crate::repeater;
 use crate::responder;
@@ -32,7 +33,7 @@ pub async fn run(cfg: Resolved) -> i32 {
         Ok(r) => r,
         Err(e) => {
             tracing::error!(err = %e, "interface setup failed");
-            return 1;
+            return exit_code::INTERFACE_SETUP;
         }
     };
 
@@ -41,7 +42,7 @@ pub async fn run(cfg: Resolved) -> i32 {
     if let Some(user) = cfg.user.clone() {
         if let Err(e) = daemon::switch_user(&user) {
             tracing::error!(user = %user, err = %e, "switch_user failed");
-            return 1;
+            return exit_code::PRIVILEGE_DROP;
         }
     }
 
@@ -50,7 +51,7 @@ pub async fn run(cfg: Resolved) -> i32 {
         Ok(p) => Arc::new(p),
         Err(e) => {
             tracing::error!(err = %e, "service record construction failed");
-            return 1;
+            return exit_code::SERVICE_RECORDS;
         }
     };
     tracing::info!(
@@ -101,7 +102,7 @@ pub async fn run(cfg: Resolved) -> i32 {
     let _ = tokio::time::timeout(Duration::from_millis(200), drain).await;
 
     log_metrics(&state);
-    0
+    exit_code::OK
 }
 
 /// Translate SIGINT/SIGTERM into a shutdown signal.
@@ -254,9 +255,7 @@ fn handle_response_msg(state: &Arc<State>, msg: &Message) {
             InsertOutcome::Rejected => {
                 state.metrics.cache_rejected.fetch_add(1, Ordering::Relaxed);
             }
-            InsertOutcome::Inserted
-            | InsertOutcome::Refreshed
-            | InsertOutcome::GoodbyeNoOp => {}
+            InsertOutcome::Inserted | InsertOutcome::Refreshed | InsertOutcome::GoodbyeNoOp => {}
         }
     }
 }

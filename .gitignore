@@ -30,4 +30,4 @@ local.nmdns.toml
 tmp/
 
 # Generated files
-result/
+result
