@@ -1,0 +1,39 @@
+name: Feature request
+description: Propose a new feature or enhancement
+labels: ["enhancement", "triage"]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem / use case
+      description: What are you trying to do? What is the current limitation?
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe the feature you would like, ideally with config / CLI surface.
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds, other tools, or alternative designs you evaluated.
+
+  - type: textarea
+    id: rfc
+    attributes:
+      label: Relevant RFC or specification
+      description: Cite the section of RFC 6762, RFC 6763, etc. if applicable.
+
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I have searched existing issues and discussions.
+          required: true
