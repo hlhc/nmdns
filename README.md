@@ -19,8 +19,8 @@ and [hickory-proto](https://crates.io/crates/hickory-proto).
 - **Cache** — every record seen on any interface is parsed and stored
   with TTL for diagnostics, TTL tracking, and cached responses on other
   interfaces.
-- **Respond** — serves `A`, `PTR`, `SRV`, and `TXT` queries for the
-  host's own `*.local.` name and any services declared in the config.
+- **Respond** — serves `A`, `AAAA`, `PTR`, `SRV`, and `TXT` queries for
+  the host's own `*.local.` name and any services declared in the config.
 - **Browse** — periodically issues `PTR` queries for configured service
   types to keep the cache warm.
 - **Repeat** — optionally forwards raw mDNS frames between interfaces,
@@ -145,8 +145,8 @@ reference.
 | `repeat`               | bool            | `true`           | Forward unparsed mDNS between interfaces.          |
 | `answer_from_cache`    | bool            | `true`           | Answer queries from records learned on other interfaces. |
 | `hostname`             | string          | system hostname  | Advertised as `<hostname>.local.`.                 |
-| `blacklist`            | list of CIDRs   | `[]`             | Drop packets from these source nets.               |
-| `whitelist`            | list of CIDRs   | `[]`             | If non-empty, only accept these.                   |
+| `blacklist`            | list of CIDRs   | `[]`             | Drop packets from these IPv4/IPv6 source nets.     |
+| `whitelist`            | list of CIDRs   | `[]`             | If non-empty, only accept these IPv4/IPv6 nets.    |
 | `browse`               | list of names   | `[_services._dns-sd._udp.local.]` | Service types to actively browse.          |
 | `browse_interval_secs` | int             | `60`             | Seconds between browse rounds.                     |
 | `cache_tick_secs`      | int             | `5`              | Cache eviction tick.                               |
@@ -166,9 +166,9 @@ txt     = ["rp=ipp/print"]      # optional TXT entries
 # host  = "printer.local."      # optional, default = daemon hostname
 ```
 
-The daemon emits the corresponding `PTR`, `SRV`, `TXT`, and `A` records
-on startup (probes then announces; RFC 6762 §8.1 / §8.3) and replies to
-matching queries while running. On `SIGTERM` / `SIGINT` it sends
+The daemon emits the corresponding `PTR`, `SRV`, `TXT`, `A`, and `AAAA`
+records on startup (probes then announces; RFC 6762 §8.1 / §8.3) and replies
+to matching queries while running. On `SIGTERM` / `SIGINT` it sends
 "goodbye" packets with TTL 0 (RFC 6762 §10.1).
 
 ### Source filters
@@ -177,7 +177,7 @@ matching queries while running. On `SIGTERM` / `SIGINT` it sends
 the responder and the repeater.
 
 ```toml
-whitelist = ["192.168.10.0/24", "192.168.20.0/24"]
+whitelist = ["192.168.10.0/24", "192.168.20.0/24", "fe80::/10"]
 ```
 
 ### Cached responses
@@ -256,10 +256,14 @@ flowchart TB
     evict --> cache
 ```
 
-- One shared receive socket bound to `0.0.0.0:5353` with `IP_PKTINFO`,
-  so the daemon knows which interface every datagram arrived on.
-- One send socket per interface, bound with `SO_BINDTODEVICE`, so
-  replies and announcements egress on the right link.
+- One shared IPv4 receive socket bound to `0.0.0.0:5353` with
+  `IP_PKTINFO`, plus one shared IPv6 receive socket bound to `[::]:5353`
+  with IPv6 packet info when any monitored interface has IPv6.
+- IPv4 multicast uses `224.0.0.251:5353`; IPv6 multicast uses
+  `ff02::fb:5353` scoped to the receiving/sending interface.
+- One send socket per interface address family, bound with
+  `SO_BINDTODEVICE` on Linux, so replies and announcements egress on the
+  right link.
 - `hickory-proto` handles DNS message parsing and encoding only; the
   cache, responder, and DNS-SD logic live in this crate.
 
@@ -313,24 +317,31 @@ number, so a regression points straight at the violated rule.
 | RFC §  | Rule                                                                        | Status |
 |--------|-----------------------------------------------------------------------------|--------|
 | §3     | Hostnames are `<single-label>.local.`                                       | ✓      |
+| §3     | IPv6 mDNS multicast address is `ff02::fb`                                   | ✓      |
 | §5.2   | Browser: 20–120 ms initial jitter before the first query                    | ✓      |
 | §5.2   | Browser: successive query intervals double, capped at `browse_interval_secs`| ✓      |
 | §6     | Unique-answer / probe-defense responses sent without delay                  | ✓      |
 | §6     | Shared / multi-question responses delayed 20–120 ms                         | ✓      |
 | §6     | TC-bit (truncated query) responses delayed 400–500 ms                       | ✓      |
 | §6     | Per-(record, interface) 1 s minimum multicast interval                      | ✓      |
+| §6     | Per-(AAAA record, interface) 1 s minimum multicast interval                 | ✓      |
 | §6     | Probe-defense uses reduced 250 ms interval                                  | ✓      |
 | §7.1   | Known-Answer Suppression: fresh known-answers are dropped                   | ✓      |
+| §7.1   | Known-Answer Suppression applies to AAAA records                            | ✓      |
 | §7.1   | Known-Answer Suppression: stale known-answers (TTL < ½) are kept            | ✓      |
 | §8.1   | Probe: 0–250 ms initial random jitter                                       | ✓      |
 | §8.1   | Probe: three probes 250 ms apart                                            | ✓      |
 | §8.1   | Probe message format (qtype=ANY, QU bit, Authority Section)                 | ✓      |
 | §8.1   | Incoming probes detected by Authority-Section records                       | ✓      |
+| §8.1   | Incoming AAAA probes detected by Authority-Section records                  | ✓      |
 | §8.3   | Announcement gap ≥ 1 s                                                      | ✓      |
 | §10.1  | Goodbye records carry TTL = 0                                               | ✓      |
+| §10.1  | Goodbye records include published AAAA records                              | ✓      |
 | §10.1  | Receiver: TTL = 0 evicts the matching cache entry                           | ✓      |
 | §10.2  | Cache-flush bit on unique records; not on shared PTR                        | ✓      |
+| §10.2  | Cache-flush bit on host AAAA records                                        | ✓      |
 | §11    | Source-address filter (CIDR blacklist / whitelist)                          | ✓      |
+| §11    | IPv6 source-address filter (CIDR blacklist / whitelist)                     | ✓      |
 | §11    | IP TTL = 255 on outgoing mDNS sockets                                       | ✓      |
 | §18.4  | Authoritative Answer bit set on responses                                   | ✓      |
 | §8.2   | Simultaneous-probe lexicographic tiebreaking & rename-on-conflict           | ✗      |
@@ -345,7 +356,9 @@ cargo test --test rfc6762
 
 ## Limitations
 
-- IPv4 only. (IPv6 mDNS over `ff02::fb` is not implemented.)
+- IPv6 support uses link-local interface addresses. Interfaces may be
+  IPv4-only, IPv6-only, or dual-stack, but IPv6 publishing requires a usable
+  link-local address on the configured interface.
 - No full conflict resolution (RFC 6762 §8.2 lexicographic tiebreaking).
   The daemon assumes its hostname is unique on the link; probes are
   sent so other hosts can defer to it.

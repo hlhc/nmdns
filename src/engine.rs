@@ -185,10 +185,10 @@ async fn main_loop(
 }
 
 async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published>, pkt: Datagram) {
-    let from = *pkt.source.ip();
+    let from = pkt.source.ip();
 
     // Loopback prevention.
-    if state.ifaces.iter().any(|i| i.addr == from) {
+    if state.ifaces.iter().any(|i| i.has_addr(from)) {
         return;
     }
 
@@ -207,7 +207,7 @@ async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published
     // does so.
     match Message::from_vec(&pkt.data) {
         Ok(msg) if msg.metadata.message_type == MessageType::Query => {
-            handle_query_msg(state, published, &msg, recv_idx).await;
+            handle_query_msg(state, published, &msg, recv_idx, pkt.family).await;
         }
         Ok(msg) => handle_response_msg(state, &msg, recv_idx),
         Err(e) => {
@@ -226,6 +226,7 @@ async fn handle_query_msg(
     published: &Arc<services::Published>,
     msg: &Message,
     recv_idx: Option<usize>,
+    family: iface::IpFamily,
 ) {
     state
         .metrics
@@ -233,7 +234,7 @@ async fn handle_query_msg(
         .fetch_add(1, Ordering::Relaxed);
     if let Some(idx) = recv_idx {
         let arrival = state.ifaces[idx].clone();
-        responder::handle_query(state, msg, &arrival, published).await;
+        responder::handle_query(state, msg, &arrival, family, published).await;
     }
 }
 

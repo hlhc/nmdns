@@ -14,18 +14,18 @@
 //!     it requires binding a real multicast socket, which is unavailable
 //!     in the test sandbox.
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
 use hickory_proto::op::{Message, MessageType, OpCode, Query};
-use hickory_proto::rr::rdata::A;
+use hickory_proto::rr::rdata::{A, AAAA};
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 
 use nmdns::cache::Cache;
 use nmdns::config::{Resolved, ServiceConfig};
-use nmdns::iface::Iface;
+use nmdns::iface::{ipv6_net, Iface, IfaceV4, IfaceV6, MDNS_ADDR_V6};
 use nmdns::responder::{apply_known_answers, is_probe_for_us};
 use nmdns::services;
 use nmdns::timing::{
@@ -40,13 +40,34 @@ use nmdns::timing::{
 fn fake_iface(ip: [u8; 4]) -> Arc<Iface> {
     let std_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
     std_sock.set_nonblocking(true).unwrap();
+    let addr = Ipv4Addr::from(ip);
     Arc::new(Iface {
         name: "test0".into(),
         ifindex: 0,
-        addr: Ipv4Addr::from(ip),
-        mask: Ipv4Addr::new(255, 255, 255, 0),
-        net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
-        send: tokio::net::UdpSocket::from_std(std_sock).unwrap(),
+        v4: Some(IfaceV4 {
+            addr,
+            mask: Ipv4Addr::new(255, 255, 255, 0),
+            net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
+            send: tokio::net::UdpSocket::from_std(std_sock).unwrap(),
+        }),
+        v6: None,
+    })
+}
+
+fn fake_iface_v6(ip: Ipv6Addr) -> Arc<Iface> {
+    let std_sock = std::net::UdpSocket::bind("[::1]:0").unwrap();
+    std_sock.set_nonblocking(true).unwrap();
+    Arc::new(Iface {
+        name: "test0".into(),
+        ifindex: 0,
+        v4: None,
+        v6: Some(IfaceV6 {
+            addr: ip,
+            prefix_len: 64,
+            net: ipv6_net(ip, 64),
+            scope_id: 1,
+            send: tokio::net::UdpSocket::from_std(std_sock).unwrap(),
+        }),
     })
 }
 
@@ -61,6 +82,14 @@ fn published_with_one_service() -> services::Published {
     }];
     let ifs = vec![fake_iface([10, 0, 0, 1])];
     services::build(host, &svcs, &ifs).unwrap()
+}
+
+fn published_with_ipv6_host() -> services::Published {
+    let host = Name::from_str("router.local.").unwrap();
+    let ifs = vec![fake_iface_v6(Ipv6Addr::from(
+        0xfe80_0000_0000_0000_0000_0000_0000_0001u128,
+    ))];
+    services::build(host, &[], &ifs).unwrap()
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +107,12 @@ fn rfc6762_s3_hostname_ends_in_local() {
     // DNS label").
     let h = services::resolve_hostname(&Some("foo.example.com".into()));
     assert_eq!(h.to_string(), "foo.local.");
+}
+
+/// RFC 6762 §3: IPv6 mDNS uses the link-local multicast address ff02::fb.
+#[test]
+fn rfc6762_s3_ipv6_multicast_address_ff02_fb() {
+    assert_eq!(MDNS_ADDR_V6, Ipv6Addr::new(0xff02, 0, 0, 0, 0, 0, 0, 0xfb));
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +215,22 @@ fn rfc6762_s6_per_record_per_iface_min_interval() {
     );
 }
 
+/// RFC 6762 §6: the same per-record-per-interface multicast interval applies
+/// to AAAA records.
+#[test]
+fn rfc6762_s6_aaaa_per_record_per_iface_min_interval() {
+    let t = timing::MulticastTracker::new();
+    let r = Record::from_rdata(
+        Name::from_str("foo.local.").unwrap(),
+        120,
+        RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
+    );
+    assert!(t.allows(1, &r, MIN_MULTICAST_INTERVAL));
+    t.mark(1, &r);
+    assert!(!t.allows(1, &r, MIN_MULTICAST_INTERVAL));
+    assert!(t.allows(2, &r, MIN_MULTICAST_INTERVAL));
+}
+
 /// RFC 6762 §6 (last paragraph): the one-second rule is reduced to 250 ms
 /// for probe-defense responses.
 #[test]
@@ -232,6 +283,27 @@ fn rfc6762_s7_1_known_answer_keeps_stale() {
     assert_eq!(answers.len(), 1, "stale known-answer must NOT suppress");
 }
 
+#[test]
+fn rfc6762_s7_1_known_answer_suppression_aaaa_fresh() {
+    let name = Name::from_str("foo.local.").unwrap();
+    let mut answers = vec![Record::from_rdata(
+        name.clone(),
+        120,
+        RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
+    )];
+    let mut q = Message::new(0, MessageType::Query, OpCode::Query);
+    q.add_answer(Record::from_rdata(
+        name,
+        120,
+        RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)),
+    ));
+    apply_known_answers(&mut answers, &q);
+    assert!(
+        answers.is_empty(),
+        "fresh AAAA known-answer must be suppressed"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // §8.1 — Probing
 // ---------------------------------------------------------------------------
@@ -274,6 +346,20 @@ fn rfc6762_s8_1_probe_detected_via_authority_section() {
     q.set_name(name).set_query_type(RecordType::A);
     plain.add_query(q);
     assert!(!is_probe_for_us(&plain, &[unique]));
+}
+
+#[test]
+fn rfc6762_s8_1_probe_detected_for_aaaa_authority() {
+    let name = Name::from_str("foo.local.").unwrap();
+    let mut unique = Record::from_rdata(name.clone(), 120, RData::AAAA(AAAA(Ipv6Addr::LOCALHOST)));
+    unique.mdns_cache_flush = true;
+
+    let mut probe = Message::new(0, MessageType::Query, OpCode::Query);
+    let mut q = Query::new();
+    q.set_name(name).set_query_type(RecordType::ANY);
+    probe.add_query(q);
+    probe.add_authority(unique.clone());
+    assert!(is_probe_for_us(&probe, &[unique]));
 }
 
 /// RFC 6762 §8.1: probe queries MUST use qtype=ANY and MUST set the
@@ -340,6 +426,14 @@ async fn rfc6762_s10_1_goodbye_records_have_ttl_zero() {
     assert!(g.iter().any(|r| r.record_type() == RecordType::TXT));
 }
 
+#[tokio::test]
+async fn rfc6762_s10_1_goodbye_includes_aaaa_records() {
+    let p = published_with_ipv6_host();
+    let g = services::goodbye(&p);
+    assert!(g.iter().any(|r| r.record_type() == RecordType::AAAA));
+    assert!(g.iter().all(|r| r.ttl == 0));
+}
+
 /// RFC 6762 §10.1: receivers of a goodbye packet "SHOULD record the new
 /// TTL of zero" (which deletes the record from the cache).
 #[test]
@@ -395,6 +489,13 @@ async fn rfc6762_s10_2_cache_flush_bit_on_unique_only() {
     }
 }
 
+#[tokio::test]
+async fn rfc6762_s10_2_cache_flush_bit_on_host_aaaa() {
+    let p = published_with_ipv6_host();
+    assert_eq!(p.host_aaaa.len(), 1);
+    assert!(p.host_aaaa[0].mdns_cache_flush);
+}
+
 // ---------------------------------------------------------------------------
 // §11 — Source Address Check
 // ---------------------------------------------------------------------------
@@ -422,6 +523,32 @@ fn rfc6762_s11_source_filter_whitelist() {
     let cfg = Resolved::parse(toml).unwrap();
     assert!(cfg.allow_source(Ipv4Addr::new(10, 1, 2, 3)));
     assert!(!cfg.allow_source(Ipv4Addr::new(192, 168, 1, 1)));
+}
+
+#[test]
+fn rfc6762_s11_ipv6_source_filter_blacklist() {
+    let toml = r#"
+        interfaces = ["eth0"]
+        blacklist = ["fe80::/10"]
+    "#;
+    let cfg = Resolved::parse(toml).unwrap();
+    assert!(!cfg.allow_source(Ipv6Addr::from(
+        0xfe80_0000_0000_0000_0000_0000_0000_0010u128
+    )));
+    assert!(cfg.allow_source(Ipv6Addr::LOCALHOST));
+}
+
+#[test]
+fn rfc6762_s11_ipv6_source_filter_whitelist() {
+    let toml = r#"
+        interfaces = ["eth0"]
+        whitelist = ["fd00::/8"]
+    "#;
+    let cfg = Resolved::parse(toml).unwrap();
+    assert!(cfg.allow_source(Ipv6Addr::from(
+        0xfd00_0000_0000_0000_0000_0000_0000_0001u128
+    )));
+    assert!(!cfg.allow_source(Ipv6Addr::LOCALHOST));
 }
 
 // ---------------------------------------------------------------------------

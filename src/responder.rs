@@ -10,7 +10,7 @@ use hickory_proto::rr::rdata::PTR;
 use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 use tokio::time::sleep;
 
-use crate::iface::Iface;
+use crate::iface::{Iface, IpFamily};
 use crate::record_key::{rdata_eq, RecordKey};
 use crate::services::Published;
 use crate::state::State;
@@ -87,10 +87,11 @@ fn candidate_answers(
 
     for q in &msg.queries {
         for r in pub_records.answer(q.name(), q.query_type()) {
-            // Strip out non-local-iface host A records.
-            if r.record_type() == RecordType::A
+            // Strip out host address records that do not belong to the
+            // interface where the query arrived.
+            if matches!(r.record_type(), RecordType::A | RecordType::AAAA)
                 && !pub_records
-                    .host_a_for(arrival.addr)
+                    .host_records_for_iface(arrival)
                     .iter()
                     .any(|hr| hr == &r)
             {
@@ -200,6 +201,7 @@ pub async fn handle_query(
     state: &Arc<State>,
     msg: &Message,
     arrival: &Arc<Iface>,
+    arrival_family: IpFamily,
     pub_records: &Published,
 ) {
     if msg.metadata.message_type != MessageType::Query {
@@ -225,7 +227,7 @@ pub async fn handle_query(
 
     // RFC 6762 §8.1/§8.2: a probe arrives as a query with the proposed
     // records in the Authority Section. Defenders MUST answer immediately.
-    let unique_records = pub_records.unique_for_iface(arrival.addr);
+    let unique_records = pub_records.unique_for_iface(arrival);
     let probe_defense = is_probe_for_us(msg, &unique_records);
 
     let class = if probe_defense {
@@ -261,7 +263,7 @@ pub async fn handle_query(
         None => return,
     };
 
-    if let Err(e) = arrival.send_mdns(&bytes).await {
+    if let Err(e) = arrival.send_mdns_on(arrival_family, &bytes).await {
         tracing::warn!(iface = %arrival.name, err = %e, "respond send failed");
         return;
     }
@@ -284,7 +286,7 @@ fn build_announce(pub_records: &Published, iface: &Iface) -> Option<Vec<u8>> {
     let mut msg = Message::response(0, OpCode::Query);
     msg.metadata.authoritative = true;
 
-    for r in pub_records.host_a_for(iface.addr) {
+    for r in pub_records.host_records_for_iface(iface) {
         msg.add_answer(r);
     }
     for s in &pub_records.services {
@@ -306,7 +308,7 @@ fn build_announce(pub_records: &Published, iface: &Iface) -> Option<Vec<u8>> {
 /// out of scope; we emit the probes so peers can defer to us.
 pub async fn probe_all(state: &Arc<State>, pub_records: &Published) {
     for iface in &state.ifaces {
-        let unique = pub_records.unique_for_iface(iface.addr);
+        let unique = pub_records.unique_for_iface(iface);
         if unique.is_empty() {
             continue;
         }
@@ -374,7 +376,7 @@ pub async fn announce_all(state: &Arc<State>, pub_records: &Published) {
                 tracing::warn!(iface = %iface.name, err = %e, "announce send failed");
                 continue;
             }
-            for r in pub_records.unique_for_iface(iface.addr) {
+            for r in pub_records.unique_for_iface(iface) {
                 state.mc_tracker.mark(iface.ifindex, &r);
             }
         }
@@ -413,15 +415,16 @@ pub async fn announce_goodbye(state: &Arc<State>, pub_records: &Published) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_proto::rr::rdata::{A, SRV, TXT};
+    use hickory_proto::rr::rdata::{A, AAAA, SRV, TXT};
     use hickory_proto::rr::RData;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
     use std::sync::OnceLock;
     use tokio_util::sync::CancellationToken;
 
     use crate::cache::Cache;
     use crate::config::Resolved;
+    use crate::iface::IfaceV4;
     use crate::state::Metrics;
 
     fn fake_iface(name: &str, ip: [u8; 4], ifindex: u32) -> Arc<Iface> {
@@ -439,10 +442,13 @@ mod tests {
         Arc::new(Iface {
             name: name.into(),
             ifindex,
-            addr,
-            mask: Ipv4Addr::new(255, 255, 255, 0),
-            net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
-            send,
+            v4: Some(IfaceV4 {
+                addr,
+                mask: Ipv4Addr::new(255, 255, 255, 0),
+                net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
+                send,
+            }),
+            v6: None,
         })
     }
 
@@ -540,6 +546,7 @@ answer_from_cache = {answer_from_cache}
         let published = Published {
             hostname: Name::from_str("router.local.").unwrap(),
             host_a: Vec::new(),
+            host_aaaa: Vec::new(),
             services: Vec::new(),
         };
         state.cache.insert_from(
@@ -567,6 +574,7 @@ answer_from_cache = {answer_from_cache}
         let published = Published {
             hostname: Name::from_str("router.local.").unwrap(),
             host_a: Vec::new(),
+            host_aaaa: Vec::new(),
             services: Vec::new(),
         };
 
@@ -602,6 +610,16 @@ answer_from_cache = {answer_from_cache}
             Record::from_rdata(target, 120, RData::A(A(Ipv4Addr::new(192, 168, 20, 50)))),
             Some(iot.ifindex),
         );
+        state.cache.insert_from(
+            Record::from_rdata(
+                Name::from_str("printer.local.").unwrap(),
+                120,
+                RData::AAAA(AAAA(Ipv6Addr::from(
+                    0xfe80_0000_0000_0000_0000_0000_0000_0050u128,
+                ))),
+            ),
+            Some(iot.ifindex),
+        );
 
         let msg = query("_ipp._tcp.local.", RecordType::PTR);
         let answers = candidate_answers(&state, &msg, &trusted, &published);
@@ -615,5 +633,8 @@ answer_from_cache = {answer_from_cache}
             .iter()
             .any(|r| r.record_type() == RecordType::TXT));
         assert!(additionals.iter().any(|r| r.record_type() == RecordType::A));
+        assert!(additionals
+            .iter()
+            .any(|r| r.record_type() == RecordType::AAAA));
     }
 }

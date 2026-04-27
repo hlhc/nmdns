@@ -265,6 +265,38 @@ whitelist  = ["192.168.50.0/24"]
 }
 
 #[test]
+fn check_accepts_ipv6_blacklist() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+blacklist  = ["fe80::/10", "2001:db8:1::/48"]
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .success();
+}
+
+#[test]
+fn check_accepts_mixed_ipv4_ipv6_whitelist() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+whitelist  = ["192.168.50.0/24", "fd00::/8"]
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .success();
+}
+
+#[test]
 fn check_accepts_zero_mask_meaning_any() {
     let f = write_config(
         r#"
@@ -336,6 +368,24 @@ fn bad_subnet_mask_too_large() {
         r#"
 interfaces = ["eth0"]
 whitelist  = ["10.0.0.0/33"]
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .failure()
+        .code(exit_code::CONFIG)
+        .stderr(predicate::str::contains("mask"));
+}
+
+#[test]
+fn bad_ipv6_subnet_mask_too_large() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+whitelist  = ["fe80::/129"]
 "#,
     );
     nmdns()

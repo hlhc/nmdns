@@ -1,8 +1,9 @@
 //! Records the daemon publishes (advertises) on every interface.
 //!
 //! Two categories:
-//!  * **Host records**: `<hostname>.local.` A record for each interface's
-//!    own IP. Reported in response to ANY/A queries for the hostname.
+//!  * **Host records**: `<hostname>.local.` A/AAAA records for each
+//!    interface's own IPs. Reported in response to ANY/A/AAAA queries for
+//!    the hostname.
 //!  * **Service records**: DNS-SD instances declared in the config. Each
 //!    instance produces:
 //!      - `<service>` PTR \u2192 `<instance>.<service>`
@@ -10,11 +11,11 @@
 //!      - `<instance>.<service>` SRV \u2192 host:port
 //!      - `<instance>.<service>` TXT \u2192 key=value records
 
-use std::net::Ipv4Addr;
+use std::net::{Ipv4Addr, Ipv6Addr};
 use std::str::FromStr;
 use std::sync::Arc;
 
-use hickory_proto::rr::rdata::{A, PTR, SRV, TXT};
+use hickory_proto::rr::rdata::{A, AAAA, PTR, SRV, TXT};
 use hickory_proto::rr::{Name, RData, Record, RecordType};
 use thiserror::Error;
 
@@ -41,6 +42,8 @@ pub struct Published {
     pub hostname: Name,
     /// `<hostname>.local. IN A <iface_ip>` records (one per interface).
     pub host_a: Vec<Record>,
+    /// `<hostname>.local. IN AAAA <iface_ip>` records (one per IPv6 interface).
+    pub host_aaaa: Vec<Record>,
     pub services: Vec<ServiceRecords>,
 }
 
@@ -106,9 +109,20 @@ pub fn build(
 ) -> Result<Published, ServiceError> {
     let host_a = ifaces
         .iter()
-        .map(|i| {
+        .filter_map(|i| i.addr_v4())
+        .map(|addr| {
             // Host A is a unique record (RFC 6762 §10.2): set cache-flush.
-            let mut r = Record::from_rdata(hostname.clone(), TTL_HOST, RData::A(A(i.addr)));
+            let mut r = Record::from_rdata(hostname.clone(), TTL_HOST, RData::A(A(addr)));
+            r.mdns_cache_flush = true;
+            r
+        })
+        .collect();
+
+    let host_aaaa = ifaces
+        .iter()
+        .filter_map(|i| i.addr_v6())
+        .map(|addr| {
+            let mut r = Record::from_rdata(hostname.clone(), TTL_HOST, RData::AAAA(AAAA(addr)));
             r.mdns_cache_flush = true;
             r
         })
@@ -175,6 +189,7 @@ pub fn build(
     Ok(Published {
         hostname,
         host_a,
+        host_aaaa,
         services: svc_recs,
     })
 }
@@ -189,6 +204,13 @@ impl Published {
         // Host A records
         if any || qtype == RecordType::A {
             for r in &self.host_a {
+                if &r.name == qname {
+                    out.push(r.clone());
+                }
+            }
+        }
+        if any || qtype == RecordType::AAAA {
+            for r in &self.host_aaaa {
                 if &r.name == qname {
                     out.push(r.clone());
                 }
@@ -223,6 +245,27 @@ impl Published {
             .collect()
     }
 
+    /// IPv6 equivalent of [`Published::host_a_for`].
+    pub fn host_aaaa_for(&self, addr: Ipv6Addr) -> Vec<Record> {
+        self.host_aaaa
+            .iter()
+            .filter(|r| matches!(&r.data, RData::AAAA(AAAA(a)) if *a == addr))
+            .cloned()
+            .collect()
+    }
+
+    /// Host records that belong to `iface`, across both address families.
+    pub fn host_records_for_iface(&self, iface: &Iface) -> Vec<Record> {
+        let mut out = Vec::new();
+        if let Some(addr) = iface.addr_v4() {
+            out.extend(self.host_a_for(addr));
+        }
+        if let Some(addr) = iface.addr_v6() {
+            out.extend(self.host_aaaa_for(addr));
+        }
+        out
+    }
+
     /// All records that are *unique* (cache-flush bit set) and therefore
     /// candidates for probing per RFC 6762 §8.1. The host A on each iface
     /// is collected lazily by `unique_for_iface` below; this returns the
@@ -237,10 +280,10 @@ impl Published {
         out
     }
 
-    /// All unique records to advertise on the interface bound to `addr`:
-    /// the iface-specific host A plus all service-instance SRV/TXT.
-    pub fn unique_for_iface(&self, addr: Ipv4Addr) -> Vec<Record> {
-        let mut out = self.host_a_for(addr);
+    /// All unique records to advertise on `iface`: its iface-specific host
+    /// A/AAAA records plus all service-instance SRV/TXT records.
+    pub fn unique_for_iface(&self, iface: &Iface) -> Vec<Record> {
+        let mut out = self.host_records_for_iface(iface);
         out.extend(self.unique_service_records());
         out
     }
@@ -254,6 +297,7 @@ pub fn goodbye(p: &Published) -> Vec<Record> {
         r
     };
     out.extend(p.host_a.iter().cloned().map(zero));
+    out.extend(p.host_aaaa.iter().cloned().map(zero));
     for s in &p.services {
         out.push(zero(s.ptr_type_to_instance.clone()));
         out.push(zero(s.srv.clone()));
@@ -266,20 +310,49 @@ pub fn goodbye(p: &Published) -> Vec<Record> {
 mod tests {
     use super::*;
     use crate::config::ServiceConfig;
-    use std::net::Ipv4Addr;
+    use crate::iface::{ipv6_net, IfaceV4, IfaceV6};
 
-    fn fake_iface(name: &str, ip: [u8; 4]) -> Arc<Iface> {
+    fn test_socket(addr: &str) -> tokio::net::UdpSocket {
         // We only need the address fields for these tests; build a synthetic
         // Iface using a dummy UDP socket.
-        let std_sock = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let std_sock = std::net::UdpSocket::bind(addr).unwrap();
         std_sock.set_nonblocking(true).unwrap();
+        tokio::net::UdpSocket::from_std(std_sock).unwrap()
+    }
+
+    fn fake_iface(name: &str, ip: [u8; 4]) -> Arc<Iface> {
+        let addr = Ipv4Addr::from(ip);
         Arc::new(Iface {
             name: name.into(),
             ifindex: 0,
-            addr: Ipv4Addr::from(ip),
-            mask: Ipv4Addr::new(255, 255, 255, 0),
-            net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
-            send: tokio::net::UdpSocket::from_std(std_sock).unwrap(),
+            v4: Some(IfaceV4 {
+                addr,
+                mask: Ipv4Addr::new(255, 255, 255, 0),
+                net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
+                send: test_socket("127.0.0.1:0"),
+            }),
+            v6: None,
+        })
+    }
+
+    fn fake_dual_iface(name: &str, ip: [u8; 4], ip6: Ipv6Addr) -> Arc<Iface> {
+        let addr = Ipv4Addr::from(ip);
+        Arc::new(Iface {
+            name: name.into(),
+            ifindex: 0,
+            v4: Some(IfaceV4 {
+                addr,
+                mask: Ipv4Addr::new(255, 255, 255, 0),
+                net: Ipv4Addr::from([ip[0], ip[1], ip[2], 0]),
+                send: test_socket("127.0.0.1:0"),
+            }),
+            v6: Some(IfaceV6 {
+                addr: ip6,
+                prefix_len: 64,
+                net: ipv6_net(ip6, 64),
+                scope_id: 1,
+                send: test_socket("[::1]:0"),
+            }),
         })
     }
 
@@ -296,6 +369,7 @@ mod tests {
         let ifs = vec![fake_iface("eth0", [10, 0, 0, 1])];
         let p = build(host.clone(), &svcs, &ifs).unwrap();
         assert_eq!(p.host_a.len(), 1);
+        assert!(p.host_aaaa.is_empty());
         assert_eq!(p.services.len(), 1);
 
         // ANY query for hostname returns A
@@ -306,6 +380,25 @@ mod tests {
         let svc_type = Name::from_str("_http._tcp.local.").unwrap();
         let ans = p.answer(&svc_type, RecordType::PTR);
         assert_eq!(ans.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn build_publishes_host_aaaa() {
+        let host = Name::from_str("router.local.").unwrap();
+        let ip6 = Ipv6Addr::from(0xfe80_0000_0000_0000_0000_0000_0000_0001u128);
+        let ifs = vec![fake_dual_iface("eth0", [10, 0, 0, 1], ip6)];
+        let p = build(host.clone(), &[], &ifs).unwrap();
+
+        assert_eq!(p.host_a.len(), 1);
+        assert_eq!(p.host_aaaa.len(), 1);
+        assert!(p.host_aaaa[0].mdns_cache_flush);
+
+        let aaaa = p.answer(&host, RecordType::AAAA);
+        assert_eq!(aaaa.len(), 1);
+        assert_eq!(aaaa[0].record_type(), RecordType::AAAA);
+        let any = p.answer(&host, RecordType::ANY);
+        assert!(any.iter().any(|r| r.record_type() == RecordType::A));
+        assert!(any.iter().any(|r| r.record_type() == RecordType::AAAA));
     }
 
     #[tokio::test]

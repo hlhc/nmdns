@@ -72,15 +72,15 @@ in
     blacklist = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "10.0.0.0/8" ];
-      description = "Source subnets whose packets are dropped.";
+      example = [ "10.0.0.0/8" "fe80::/10" ];
+      description = "IPv4 or IPv6 source subnets whose packets are dropped.";
     };
 
     whitelist = lib.mkOption {
       type = lib.types.listOf lib.types.str;
       default = [ ];
-      example = [ "192.168.50.0/24" ];
-      description = "Only forward packets from these source subnets.";
+      example = [ "192.168.50.0/24" "fd00::/8" ];
+      description = "Only forward packets from these IPv4 or IPv6 source subnets.";
     };
 
     browse = lib.mkOption {

@@ -1,8 +1,10 @@
-.TH NMDNS 1 "April 2026" "nmdns 0.2.0" "User Commands"
-.
+.\" nmdns.8 - Multicast DNS responder/repeater daemon
+.\"
+.\" SPDX-License-Identifier: GPL-2.0-or-later
+.\"
+.TH NMDNS 8 2026\-04\-27 "nmdns 0.2.0" "Linux System Administration"
 .SH NAME
-nmdns \- mDNS / DNS\-SD responder, cache, and cross\-interface repeater
-.
+nmdns \- mDNS/DNS\-SD responder, cache, and cross\-interface repeater
 .SH SYNOPSIS
 .B nmdns
 .RB [ \-c
@@ -15,282 +17,195 @@ nmdns \- mDNS / DNS\-SD responder, cache, and cross\-interface repeater
 .br
 .B nmdns
 .B \-h
-.
 .SH DESCRIPTION
 .B nmdns
-is a daemon for Linux hosts that sit between multiple link\-local
-network segments (routers, gateways, VLANs, container bridges, etc.).
-It performs four functions:
-.
+is a daemon for Linux hosts that bridge multiple link\-local network
+segments (routers, gateways, VLANs, container bridges, and similar).
+mDNS uses link\-local multicast with IP TTL=1; a Layer\-3 router drops
+these packets at the segment boundary.
+.B nmdns
+bridges the gap without requiring changes to clients or services.
+.PP
+The daemon provides four facilities:
 .TP
 .B Cache
-Every DNS resource record seen on any interface is parsed and stored
-with its TTL.  The cache is used for diagnostics, TTL tracking, and
-cache\-backed responses on interfaces other than the one where the
-record was learned.
-.
+Every DNS resource record seen on any monitored interface is parsed and
+stored with its TTL.
+The cache drives TTL tracking, diagnostics, and cross\-interface responses.
 .TP
 .B Respond
-Answers
-.BR A ,
-.BR PTR ,
-.BR SRV ,
-and
-.B TXT
-queries for the host\(aqs own
-.I <hostname>.local.\&
-name and any DNS\-SD services declared in the configuration file.
-At startup the daemon probes for its names (RFC\ 6762\ \(sc8.1),
-then announces all records twice (RFC\ 6762\ \(sc8.3).
-On shutdown it sends goodbye packets with TTL\ =\ 0 twice
-(RFC\ 6762\ \(sc10.1).
-.
+Answers \fBA\fR, \fBAAAA\fR, \fBPTR\fR, \fBSRV\fR, and \fBTXT\fR queries
+for the host's own \fI<hostname>.local.\fR name and any DNS\-SD services
+declared in the configuration file.
+At startup the daemon probes for uniqueness (RFC\ 6762, \(sc8.1), then
+announces all records twice (RFC\ 6762, \(sc8.3).
+On shutdown it sends goodbye packets (TTL=0) twice (RFC\ 6762, \(sc10.1).
 .TP
 .B Browse
-Periodically sends
-.B PTR
-queries for configured service types so the cache remains warm for
-clients that never issue their own queries.  Query intervals follow
-the exponential back\-off required by RFC\ 6762\ \(sc5.2.
-.
+Periodically issues \fBPTR\fR queries for configured service types, keeping
+the cache warm for clients that never query independently.
+Query intervals obey the exponential back\-off defined by RFC\ 6762, \(sc5.2.
 .TP
 .B Repeat
-Optionally re\-multicasts raw mDNS frames between interfaces so
-legacy clients that speak mDNS directly (rather than querying a cache)
-can still discover devices on other segments.
-.
-.PP
-Because mDNS uses link\-local multicast with IP\ TTL\ =\ 1, a standard
-Layer\-3 router drops these packets at the segment boundary.
-.B nmdns
-bridges the gap without requiring any changes to clients or services.
-.
+Optionally re\-multicasts raw mDNS frames across interfaces so legacy clients
+that speak mDNS directly (rather than querying a shared cache) can discover
+devices on other segments.
 .SH OPTIONS
 .TP
 .BI \-c " config"
 Path to the TOML configuration file.
-Default:
-.IR /etc/nmdns.toml .
-.
+Default: \fI/etc/nmdns.toml\fR.
 .TP
 .B \-\-check
-Parse and validate the configuration file, print a summary, then exit.
+Validate the configuration file, print a summary, and exit.
 See
 .B EXIT STATUS
-for error codes.
-.
+below.
 .TP
-.B \-h ", " \-\-help
-Print a short usage summary and exit.
-.
+.BR \-h ", " \-\-help
+Print a usage summary and exit.
 .SH EXIT STATUS
-.TP
-.B 0
-Success.
-.
-.TP
-.B 2
-Command\-line usage error emitted by
-.BR clap .
-.
-.TP
-.B 10
-Configuration file load, parse, or structural validation failed.
-.
-.TP
-.B 11
-Semantic
-.B \-\-check
-validation failed, such as an invalid DNS name.
-.
-.TP
-.B 14
-Tokio runtime creation failed.
-.
-.TP
-.B 20
-Network interface/socket setup failed.
-.
-.TP
-.B 22
-Service record construction failed during runtime startup.
-.
-.SH CONFIGURATION
-The configuration file uses
-.BR TOML (5)
-syntax.  An annotated example is installed at
-.IR /usr/share/doc/nmdns/nmdns.toml .
-.
-.SS Top\-level keys
-.TP
-.B interfaces
-.RI "(list of strings, required)"
-Network interface names the daemon listens and responds on.
-At least one must be specified.
-.
-.TP
-.B repeat
-.RI "(bool, default: " true ")"
-Forward unparsed mDNS frames between interfaces.
-Set to
-.B false
-for pure responder\-only operation.
-.
-.TP
-.B answer_from_cache
-.RI "(bool, default: " true ")"
-Answer queries from records learned on another configured interface.
-This lets the daemon serve cache\-backed responses even when
-.B repeat
-is disabled; records are not answered back onto the same interface
-where they were learned.
-.
-.TP
-.B hostname
-.RI "(string, default: system hostname)"
-The bare hostname advertised as
-.IR hostname .local.
-on every interface.
-.
-.TP
-.B blacklist
-.RI "(list of CIDR strings, default: " [] ")"
-Drop all traffic whose source IP falls within any listed subnet.
-Mutually exclusive with
-.BR whitelist .
-.
-.TP
-.B whitelist
-.RI "(list of CIDR strings, default: " [] ")"
-Only accept traffic whose source IP falls within a listed subnet.
-Mutually exclusive with
-.BR blacklist .
-.
-.TP
-.B browse
-.RI "(list of DNS names, default: " ["_services._dns-sd._udp.local."] ")"
-Service types the daemon actively queries for.  The default discovers
-every DNS\-SD service type advertised on the link (RFC\ 6763\ \(sc9).
-Example of a narrower target:
-.IR _http._tcp.local. .
-.
-.TP
-.B browse_interval_secs
-.RI "(integer, default: " 60 ")"
-Upper bound on the exponential back\-off interval between successive
-browse queries, in seconds.
-.
-.TP
-.B cache_tick_secs
-.RI "(integer, default: " 5 ")"
-How often (in seconds) the cache eviction sweep runs to remove
-records whose TTL has expired.
-.
-.TP
-.B max_cache_entries
-.RI "(integer, default: " 4096 ")"
-Upper bound on the number of records held in the cache.  When full,
-the nearest\-to\-expiry entry is evicted to make room for an insert.
-.
-.SS Service tables
-Each
-.B [[service]]
-block publishes one DNS\-SD instance and accepts the following keys:
-.
-.TP
-.B name
-.RI "(string, required)"
-Human\-readable instance name, e.g.\&
-.IR "Office Printer" .
-.
-.TP
-.B service
-.RI "(string, required)"
-DNS\-SD service type, e.g.\&
-.IR _ipp._tcp.local. .
-.
-.TP
-.B port
-.RI "(integer 1\(en65535, required)"
-TCP or UDP port advertised in the
-.B SRV
-record.
-.
-.TP
-.B txt
-.RI "(list of strings, default: " [] ")"
-Key=value pairs placed in the
-.B TXT
-record, e.g.\&
-.IR "rp=ipp/print" .
-.
-.TP
-.B host
-.RI "(string, default: daemon hostname)"
-Override the target hostname in the
-.B SRV
-record.
-.
-.SH RFC 6762 COMPLIANCE
-The following rules are implemented and each is covered by a dedicated
-test in
-.IR tests/rfc6762.rs .
-.
 .TS
-tab(@) allbox;
+tab(:) box;
+rb l.
+0:Success.
+2:Command\-line usage error.
+10:Configuration file load, parse, or structural validation failed.
+11:\fB\-\-check\fR semantic validation failed (e.g., invalid DNS name).
+14:Tokio async runtime creation failed.
+20:Network interface or socket setup failed.
+22:Service record construction failed during startup.
+.TE
+.SH CONFIGURATION
+The configuration file uses TOML syntax.
+An annotated example is installed at
+.IR /usr/share/doc/nmdns/nmdns.toml .
+.SS Top-level keys
+.TP
+.B interfaces \fR(list of strings, required)
+Network interface names the daemon monitors.
+At least one entry is required.
+.TP
+.B repeat \fR(bool, default: \fBtrue\fR)
+Re\-multicast raw mDNS frames between interfaces.
+Set to \fBfalse\fR for responder\-only operation.
+.TP
+.B answer_from_cache \fR(bool, default: \fBtrue\fR)
+Answer queries using records learned on a different configured interface.
+Records are never answered back onto the interface where they were learned.
+.TP
+.B hostname \fR(string, default: system hostname)
+Bare hostname advertised as \fIhostname\fB.local.\fR on every interface.
+.TP
+.B blacklist \fR(list of CIDR strings, default: [])
+Drop all traffic from source addresses that fall within any listed prefix.
+Mutually exclusive with \fBwhitelist\fR.
+.TP
+.B whitelist \fR(list of CIDR strings, default: [])
+Accept traffic only from source addresses that fall within a listed prefix.
+Mutually exclusive with \fBblacklist\fR.
+.TP
+.B browse \fR(list of DNS names, default: ["_services._dns-sd._udp.local."])
+Service types to query actively.
+The default causes all DNS\-SD service types on the link to be discovered
+(RFC\ 6763, \(sc9).
+.TP
+.B browse_interval_secs \fR(integer, default: \fB60\fR)
+Upper bound on the exponential back\-off interval between browse queries, in
+seconds.
+.TP
+.B cache_tick_secs \fR(integer, default: \fB5\fR)
+Period of the cache eviction sweep, in seconds.
+.TP
+.B max_cache_entries \fR(integer, default: \fB4096\fR)
+Maximum number of records in the cache.
+When the limit is reached, the nearest\-to\-expiry entry is evicted.
+.SS Service records
+Each \fB[[service]]\fR table publishes one DNS\-SD service instance.
+.TP
+.B name \fR(string, required)
+Human\-readable instance name (e.g., \fIOffice Printer\fR).
+.TP
+.B service \fR(string, required)
+DNS\-SD service type (e.g., \fI_ipp._tcp.local.\fR).
+.TP
+.B port \fR(integer 1\(en65535, required)
+Port number placed in the \fBSRV\fR record.
+.TP
+.B txt \fR(list of strings, default: [])
+Key=value pairs for the \fBTXT\fR record (e.g., \fIrp=ipp/print\fR).
+.TP
+.B host \fR(string, default: daemon hostname)
+Override the target hostname in the \fBSRV\fR record.
+.SH RFC 6762 CONFORMANCE
+The following RFC\ 6762 rules are implemented.
+Each is covered by a test in \fItests/rfc6762.rs\fR;
+run \fBcargo test \-\-test rfc6762\fR to execute the suite.
+.TS
+tab(:) box;
 lb lb lb
 l l l.
-RFC \(sc@Rule@Status
-\(sc3@Hostnames are <single-label>.local.@\(OK
-\(sc5.2@Browser: 20\(en120 ms initial jitter@\(OK
-\(sc5.2@Browser: exponential back\-off, doubling each query@\(OK
-\(sc6@Unique answer / probe\-defense: respond without delay@\(OK
-\(sc6@Shared / multi\-question: 20\(en120 ms randomized delay@\(OK
-\(sc6@TC bit set on query: 400\(en500 ms randomized delay@\(OK
-\(sc6@Per\-(record, interface) 1 s minimum multicast interval@\(OK
-\(sc6@Probe\-defense uses 250 ms interval@\(OK
-\(sc7.1@Known\-Answer Suppression (TTL >= 50%% rule)@\(OK
-\(sc8.1@Probe: 0\(en250 ms initial random jitter@\(OK
-\(sc8.1@Probe: three probes 250 ms apart@\(OK
-\(sc8.1@Probe message format (qtype=ANY, QU bit, Authority Section)@\(OK
-\(sc8.1@Detect incoming probes via Authority Section@\(OK
-\(sc8.3@Announcement gap >= 1 s@\(OK
-\(sc10.1@Goodbye: TTL=0 on host A and service PTR/SRV/TXT@\(OK
-\(sc10.1@Receiver: TTL=0 deletes the cached record@\(OK
-\(sc10.2@Cache\-flush bit on unique records only (not shared PTR)@\(OK
-\(sc11@Source\-address filter (CIDR blacklist / whitelist)@\(OK
-\(sc11@IP TTL=255 on outgoing mDNS sockets@\(OK
-\(sc18.4@Authoritative Answer bit set on responses@\(OK
-\(sc8.2@Simultaneous\-probe tiebreaking / rename\-on\-conflict@\(em
-\(sc6.1@NSEC negative responses@\(em
-\(sc7.2@Multi\-packet Known\-Answer aggregation@\(em
+Section:Rule:Status
+\(sc3:Hostnames are <single-label>.local.:yes
+\(sc3:IPv6 mDNS multicast address is ff02::fb:yes
+\(sc5.2:Browser: 20\(en120 ms initial jitter:yes
+\(sc5.2:Browser: exponential back\-off, doubling each query:yes
+\(sc6:Unique\-answer / probe\-defense: respond without delay:yes
+\(sc6:Shared / multi\-question: 20\(en120 ms randomized delay:yes
+\(sc6:TC bit set on query: 400\(en500 ms randomized delay:yes
+\(sc6:Per\-(record, iface) 1 s minimum multicast interval:yes
+\(sc6:Per\-(AAAA, iface) 1 s minimum multicast interval:yes
+\(sc6:Probe\-defense uses 250 ms interval:yes
+\(sc7.1:Known\-Answer Suppression (TTL >= 50% rule):yes
+\(sc7.1:Known\-Answer Suppression for AAAA records:yes
+\(sc8.1:Probe: 0\(en250 ms initial random jitter:yes
+\(sc8.1:Probe: three probes 250 ms apart:yes
+\(sc8.1:Probe format (qtype=ANY, QU bit, Authority Section):yes
+\(sc8.1:Detect incoming probes via Authority Section:yes
+\(sc8.1:Detect incoming AAAA probes via Authority Section:yes
+\(sc8.3:Announcement gap >= 1 s:yes
+\(sc10.1:Goodbye: TTL=0 on host A/AAAA and service PTR/SRV/TXT:yes
+\(sc10.1:Receiver: TTL=0 deletes the cached record:yes
+\(sc10.2:Cache\-flush bit on unique records only (not shared PTR):yes
+\(sc10.2:Cache\-flush bit on host AAAA records:yes
+\(sc11:Source\-address filter (CIDR blacklist / whitelist):yes
+\(sc11:IPv6 source\-address filter (CIDR blacklist / whitelist):yes
+\(sc11:IP TTL=255 on outgoing mDNS sockets:yes
+\(sc18.4:Authoritative Answer bit set on responses:yes
+\(sc8.2:Simultaneous\-probe tiebreaking / rename\-on\-conflict:no
+\(sc6.1:NSEC negative responses:no
+\(sc7.2:Multi\-packet Known\-Answer aggregation:no
 .TE
-.
-.PP
-Run
-.B cargo test \-\-test rfc6762
-to execute the compliance suite.
-.
 .SH SIGNALS
 .TP
-.B SIGTERM ", " SIGINT
-Graceful shutdown: send goodbye packets (TTL\ =\ 0) on every interface,
-then exit.
-.
+.BR SIGTERM ", " SIGINT
+Initiate graceful shutdown: transmit goodbye packets (TTL=0) on every
+interface, then exit.
 .SH FILES
 .TP
 .I /etc/nmdns.toml
 Default configuration file.
-.
 .TP
-.I /run/nmdns.pid
-Default PID file (when running as a daemon).
-.
+.I /usr/share/doc/nmdns/nmdns.toml
+Annotated example configuration.
+.SH NOTES
+.B nmdns
+requires sufficient privilege to bind UDP port\ 5353 and to join multicast
+groups.
+Run as
+.B root
+or grant
+.BR CAP_NET_BIND_SERVICE " and " CAP_NET_RAW .
+.PP
+Interfaces may be IPv4\-only, IPv6\-only, or dual\-stack.
+IPv6 operation requires a usable link\-local address (\fIfe80::/10\fR) on
+each configured interface.
 .SH EXAMPLES
 Respond for the host's own name and two services on two interfaces:
-.
+.PP
 .RS 4
 .EX
+# /etc/nmdns.toml
 interfaces = ["br\-lan", "br\-iot"]
 hostname   = "gateway"
 
@@ -306,41 +221,24 @@ service = "_ssh._tcp.local."
 port    = 22
 .EE
 .RE
-.
 .PP
-Validate the config and exit:
-.
+Validate the configuration and exit:
+.PP
 .RS 4
 .EX
 nmdns \-\-check \-c /etc/nmdns.toml
 .EE
 .RE
-.
-.SH NOTES
-.B nmdns
-must start with sufficient privilege to bind UDP port\ 5353 and join
-multicast groups.  Either run as
-.B root
-or grant
-.BR CAP_NET_BIND_SERVICE " and " CAP_NET_RAW .
-.
-.PP
-IPv6 mDNS (address
-.IR ff02::fb )
-is not currently implemented.
-.
 .SH SEE ALSO
 .BR avahi\-daemon (8),
 .BR mdnsd (8),
-.BR dns\-sd (1),
-.BR toml (5)
-.
+.BR dns\-sd (1)
 .PP
-RFC\ 6762 \(em Multicast DNS,
+RFC\ 6762 \(em Multicast DNS.
+.br
 RFC\ 6763 \(em DNS\-Based Service Discovery.
-.
-.SH AUTHORS
+.SH AUTHOR
 Written by the nmdns contributors.
-.
-.SH LICENSE
-GNU General Public License version\ 2 or later.
+.SH COLOPHON
+This page is part of the \fBnmdns\fR project.
+Source and issue tracker: https://github.com/hlhc/nmdns

@@ -4,11 +4,10 @@
 //! shape `serde` deserializes; [`Resolved::parse`] turns it into the
 //! validated, post-processed type used by the rest of the daemon.
 //!
-//! **IPv4-only.** All address-bearing config keys (`blacklist`,
-//! `whitelist`) must be IPv4 CIDRs; IPv6 support is on the roadmap but
-//! not yet wired through the socket layer.
+//! Address-bearing config keys (`blacklist`, `whitelist`) accept IPv4 and
+//! IPv6 CIDRs. The two filter lists remain mutually exclusive.
 
-use std::net::Ipv4Addr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
@@ -93,49 +92,91 @@ fn default_max_cache_entries() -> usize {
     crate::cache::DEFAULT_MAX_ENTRIES
 }
 
-/// IPv4 CIDR-style subnet (used for blacklist/whitelist filters).
+/// CIDR-style subnet used for blacklist/whitelist filters.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct Subnet {
-    pub addr: Ipv4Addr,
-    pub mask: Ipv4Addr,
-    pub net: Ipv4Addr,
+pub enum Subnet {
+    V4 {
+        addr: Ipv4Addr,
+        prefix_len: u8,
+        mask: Ipv4Addr,
+        net: Ipv4Addr,
+    },
+    V6 {
+        addr: Ipv6Addr,
+        prefix_len: u8,
+        net: Ipv6Addr,
+    },
 }
 
 impl Subnet {
-    pub fn matches(&self, ip: Ipv4Addr) -> bool {
-        (u32::from(ip) & u32::from(self.mask)) == u32::from(self.net)
+    pub fn matches(&self, ip: impl Into<IpAddr>) -> bool {
+        match (self, ip.into()) {
+            (Subnet::V4 { mask, net, .. }, IpAddr::V4(ip)) => {
+                (u32::from(ip) & u32::from(*mask)) == u32::from(*net)
+            }
+            (
+                Subnet::V6 {
+                    prefix_len, net, ..
+                },
+                IpAddr::V6(ip),
+            ) => ipv6_net(ip, *prefix_len) == *net,
+            _ => false,
+        }
     }
 }
 
 pub fn parse_subnet(s: &str) -> Result<Subnet, ConfigError> {
-    // IPv6 not supported yet; reject obvious IPv6 literals up front so the
-    // error message is helpful instead of "bad address".
-    if s.contains(':') {
-        return Err(ConfigError::BadSubnet(
-            s.to_string(),
-            "IPv6 not supported (IPv4 CIDR only)",
-        ));
-    }
     let (addr_s, mask_s) = s
         .split_once('/')
         .ok_or_else(|| ConfigError::BadSubnet(s.to_string(), "missing /"))?;
-    let addr: Ipv4Addr = addr_s
-        .parse()
-        .map_err(|_| ConfigError::BadSubnet(s.to_string(), "bad IPv4 address"))?;
     let bits: u32 = mask_s
         .parse()
         .map_err(|_| ConfigError::BadSubnet(s.to_string(), "bad mask"))?;
-    if bits > 32 {
-        return Err(ConfigError::BadSubnet(s.to_string(), "mask > 32"));
+
+    if addr_s.contains(':') {
+        let addr: Ipv6Addr = addr_s
+            .parse()
+            .map_err(|_| ConfigError::BadSubnet(s.to_string(), "bad IPv6 address"))?;
+        if bits > 128 {
+            return Err(ConfigError::BadSubnet(s.to_string(), "mask > 128"));
+        }
+        let prefix_len = bits as u8;
+        Ok(Subnet::V6 {
+            addr,
+            prefix_len,
+            net: ipv6_net(addr, prefix_len),
+        })
+    } else {
+        let addr: Ipv4Addr = addr_s
+            .parse()
+            .map_err(|_| ConfigError::BadSubnet(s.to_string(), "bad IPv4 address"))?;
+        if bits > 32 {
+            return Err(ConfigError::BadSubnet(s.to_string(), "mask > 32"));
+        }
+        let mask_u = if bits == 0 {
+            0
+        } else {
+            0xFFFF_FFFFu32 << (32 - bits)
+        };
+        let mask = Ipv4Addr::from(mask_u);
+        let net = Ipv4Addr::from(u32::from(addr) & mask_u);
+        Ok(Subnet::V4 {
+            addr,
+            prefix_len: bits as u8,
+            mask,
+            net,
+        })
     }
-    let mask_u = if bits == 0 {
+}
+
+fn ipv6_net(addr: Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
+    let addr = u128::from_be_bytes(addr.octets());
+    let mask = if prefix_len == 0 {
         0
     } else {
-        0xFFFF_FFFFu32 << (32 - bits)
+        u128::MAX << (128 - prefix_len)
     };
-    let mask = Ipv4Addr::from(mask_u);
-    let net = Ipv4Addr::from(u32::from(addr) & mask_u);
-    Ok(Subnet { addr, mask, net })
+    Ipv6Addr::from(addr & mask)
 }
 
 /// Validated runtime configuration.
@@ -203,7 +244,8 @@ impl Resolved {
     }
 
     /// Returns true if `ip` is allowed by the configured filters.
-    pub fn allow_source(&self, ip: Ipv4Addr) -> bool {
+    pub fn allow_source(&self, ip: impl Into<IpAddr>) -> bool {
+        let ip = ip.into();
         if !self.whitelist.is_empty() {
             self.whitelist.iter().any(|s| s.matches(ip))
         } else {
@@ -219,7 +261,7 @@ mod tests {
     #[test]
     fn parse_subnet_ok() {
         let s = parse_subnet("10.0.0.5/8").unwrap();
-        assert_eq!(s.net, Ipv4Addr::new(10, 0, 0, 0));
+        assert!(matches!(s, Subnet::V4 { net, .. } if net == Ipv4Addr::new(10, 0, 0, 0)));
         assert!(s.matches(Ipv4Addr::new(10, 1, 2, 3)));
         assert!(!s.matches(Ipv4Addr::new(11, 0, 0, 1)));
     }
@@ -287,8 +329,18 @@ mod tests {
     }
 
     #[test]
-    fn config_rejects_ipv6_cidr() {
-        let r = parse_subnet("::1/128");
-        assert!(matches!(r, Err(ConfigError::BadSubnet(_, _))));
+    fn parse_subnet_ipv6_ok() {
+        let s = parse_subnet("fe80::/10").unwrap();
+        assert!(s.matches(Ipv6Addr::from(
+            0xfe80_0000_0000_0000_0000_0000_0000_0001u128
+        )));
+        assert!(!s.matches(Ipv6Addr::LOCALHOST));
+        assert!(!s.matches(Ipv4Addr::new(10, 0, 0, 1)));
+    }
+
+    #[test]
+    fn parse_subnet_rejects_bad_ipv6() {
+        assert!(parse_subnet("::1/129").is_err());
+        assert!(parse_subnet("::ffff/abc").is_err());
     }
 }

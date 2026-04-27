@@ -224,9 +224,9 @@ impl Default for Cache {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use hickory_proto::rr::rdata::A;
+    use hickory_proto::rr::rdata::{A, AAAA};
     use hickory_proto::rr::RData;
-    use std::net::Ipv4Addr;
+    use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
     fn rec(name: &str, ttl: u32, ip: [u8; 4]) -> Record {
@@ -235,6 +235,10 @@ mod tests {
             ttl,
             RData::A(A(Ipv4Addr::from(ip))),
         )
+    }
+
+    fn rec_aaaa(name: &str, ttl: u32, ip: Ipv6Addr) -> Record {
+        Record::from_rdata(Name::from_str(name).unwrap(), ttl, RData::AAAA(AAAA(ip)))
     }
 
     #[test]
@@ -246,6 +250,39 @@ mod tests {
         );
         let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A);
         assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn insert_and_lookup_aaaa() {
+        let c = Cache::new();
+        assert_eq!(
+            c.insert(rec_aaaa("foo.local.", 120, Ipv6Addr::LOCALHOST)),
+            InsertOutcome::Inserted
+        );
+        let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::AAAA);
+        assert_eq!(hits.len(), 1);
+    }
+
+    #[test]
+    fn a_and_aaaa_are_distinct_records() {
+        let c = Cache::new();
+        c.insert(rec("foo.local.", 120, [1, 2, 3, 4]));
+        c.insert(rec_aaaa("foo.local.", 120, Ipv6Addr::LOCALHOST));
+        assert_eq!(
+            c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A)
+                .len(),
+            1
+        );
+        assert_eq!(
+            c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::AAAA)
+                .len(),
+            1
+        );
+        assert_eq!(
+            c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::ANY)
+                .len(),
+            2
+        );
     }
 
     #[test]

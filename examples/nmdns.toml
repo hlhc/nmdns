@@ -3,7 +3,8 @@
 # Place at /etc/nmdns.toml (or pass with `nmdns -c PATH`).
 
 # Interfaces to operate on. mDNS will be received and (with `repeat = true`)
-# forwarded between every pair. Each interface must have an IPv4 address.
+# forwarded between every pair. Each interface must have IPv4, link-local
+# IPv6, or both.
 interfaces = ["br-lan", "br-iot"]
 
 # Cross-interface repeating: forward unparsed/unknown mDNS traffic between
@@ -15,9 +16,10 @@ repeat = true
 # nmdns to respond from its cache instead of forwarding raw multicast.
 answer_from_cache = true
 
-# Source filters. Whitelist takes precedence; only one of the two may be set.
+# Source filters. IPv4 and IPv6 CIDRs are accepted. Whitelist takes precedence;
+# only one of the two may be set.
 blacklist = []
-# whitelist = ["192.168.1.0/24"]
+# whitelist = ["192.168.1.0/24", "fe80::/10"]
 
 # Hostname advertised as <hostname>.local. on every interface. Defaults to
 # the system hostname when unset.
