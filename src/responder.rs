@@ -275,10 +275,6 @@ pub async fn handle_query(
         ?class,
         "answered query"
     );
-    state
-        .metrics
-        .responses
-        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 }
 
 /// Build an unsolicited announcement message for `iface`.
@@ -425,7 +421,6 @@ mod tests {
     use crate::cache::Cache;
     use crate::config::Resolved;
     use crate::iface::IfaceV4;
-    use crate::state::Metrics;
 
     fn fake_iface(name: &str, ip: [u8; 4], ifindex: u32) -> Arc<Iface> {
         static RT: OnceLock<tokio::runtime::Runtime> = OnceLock::new();
@@ -464,7 +459,6 @@ answer_from_cache = {answer_from_cache}
             config: cfg,
             ifaces,
             cache: Cache::new(),
-            metrics: Metrics::default(),
             shutdown: CancellationToken::new(),
             mc_tracker: timing::MulticastTracker::new(),
         })

@@ -23,11 +23,6 @@ pub async fn forward(state: &Arc<State>, pkt: &Datagram, recv_iface_idx: Option<
         }
         if let Err(e) = iface.send_mdns_on(pkt.family, &pkt.data).await {
             tracing::debug!(iface = %iface.name, err = %e, "repeat send failed");
-        } else {
-            state
-                .metrics
-                .repeated
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
         }
     }
 }

@@ -2,7 +2,6 @@
 //! background tasks (cache evictor, browser, signal watcher), and drives
 //! graceful shutdown.
 
-use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -13,14 +12,14 @@ use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
 use crate::browser;
-use crate::cache::{Cache, InsertOutcome};
+use crate::cache::Cache;
 use crate::config::Resolved;
 use crate::exit_code;
 use crate::iface::{self, Datagram};
 use crate::repeater;
 use crate::responder;
 use crate::services;
-use crate::state::{Metrics, State};
+use crate::state::State;
 use crate::timing;
 
 /// Maximum number of in-flight datagram handlers. Bounds the work the
@@ -56,7 +55,6 @@ pub async fn run(cfg: Resolved) -> i32 {
         cache: Cache::with_capacity(cfg.max_cache_entries),
         config: cfg,
         ifaces,
-        metrics: Metrics::default(),
         shutdown: CancellationToken::new(),
         mc_tracker: timing::MulticastTracker::new(),
     });
@@ -92,7 +90,6 @@ pub async fn run(cfg: Resolved) -> i32 {
     };
     let _ = tokio::time::timeout(Duration::from_millis(200), drain).await;
 
-    log_metrics(&state);
     exit_code::OK
 }
 
@@ -131,10 +128,6 @@ async fn cache_evictor(state: Arc<State>) {
         }
         let n = state.cache.evict_expired();
         if n > 0 {
-            state
-                .metrics
-                .cache_evicted
-                .fetch_add(n as u64, Ordering::Relaxed);
             tracing::debug!(evicted = n, alive = state.cache.len(), "cache swept");
         }
     }
@@ -211,7 +204,6 @@ async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published
         }
         Ok(msg) => handle_response_msg(state, &msg, recv_idx),
         Err(e) => {
-            state.metrics.parse_errors.fetch_add(1, Ordering::Relaxed);
             tracing::trace!(from = %from, err = %e, "non-DNS payload");
         }
     }
@@ -228,10 +220,6 @@ async fn handle_query_msg(
     recv_idx: Option<usize>,
     family: iface::IpFamily,
 ) {
-    state
-        .metrics
-        .queries_received
-        .fetch_add(1, Ordering::Relaxed);
     if let Some(idx) = recv_idx {
         let arrival = state.ifaces[idx].clone();
         responder::handle_query(state, msg, &arrival, family, published).await;
@@ -246,29 +234,6 @@ fn handle_response_msg(state: &Arc<State>, msg: &Message, recv_idx: Option<usize
         .chain(msg.authorities.iter())
         .chain(msg.additionals.iter())
     {
-        match state.cache.insert_from(ans.clone(), source_ifindex) {
-            InsertOutcome::GoodbyeRemoved => {
-                state.metrics.cache_goodbyes.fetch_add(1, Ordering::Relaxed);
-            }
-            InsertOutcome::Rejected => {
-                state.metrics.cache_rejected.fetch_add(1, Ordering::Relaxed);
-            }
-            InsertOutcome::Inserted | InsertOutcome::Refreshed | InsertOutcome::GoodbyeNoOp => {}
-        }
+        let _ = state.cache.insert_from(ans.clone(), source_ifindex);
     }
-}
-
-fn log_metrics(state: &State) {
-    tracing::info!(
-        queries_received = state.metrics.queries_received.load(Ordering::Relaxed),
-        queries_sent = state.metrics.queries_sent.load(Ordering::Relaxed),
-        responses = state.metrics.responses.load(Ordering::Relaxed),
-        repeated = state.metrics.repeated.load(Ordering::Relaxed),
-        cache_evicted = state.metrics.cache_evicted.load(Ordering::Relaxed),
-        cache_goodbyes = state.metrics.cache_goodbyes.load(Ordering::Relaxed),
-        cache_rejected = state.metrics.cache_rejected.load(Ordering::Relaxed),
-        parse_errors = state.metrics.parse_errors.load(Ordering::Relaxed),
-        cache_size = state.cache.len(),
-        "session stats"
-    );
 }
