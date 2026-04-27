@@ -23,7 +23,6 @@ fn nmdns() -> Command {
 }
 
 const VALID_CFG: &str = r#"
-foreground = true
 interfaces = ["lo0"]
 repeat = false
 hostname = "test-router"
@@ -113,7 +112,7 @@ fn empty_interfaces_rejected() {
 
 #[test]
 fn missing_interfaces_key_rejected() {
-    let f = write_config("foreground = true\n");
+    let f = write_config("repeat = true\n");
     nmdns()
         .args(["-c"])
         .arg(f.path())

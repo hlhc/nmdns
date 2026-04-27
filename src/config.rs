@@ -36,12 +36,6 @@ pub enum ConfigError {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct RawConfig {
-    #[serde(default)]
-    foreground: bool,
-    #[serde(default = "default_pidfile")]
-    pid_file: String,
-    #[serde(default)]
-    user: Option<String>,
     interfaces: Vec<String>,
     #[serde(default = "default_true")]
     repeat: bool,
@@ -81,9 +75,6 @@ pub struct ServiceConfig {
     pub host: Option<String>,
 }
 
-fn default_pidfile() -> String {
-    "/run/nmdns.pid".to_string()
-}
 fn default_true() -> bool {
     true
 }
@@ -148,9 +139,6 @@ pub fn parse_subnet(s: &str) -> Result<Subnet, ConfigError> {
 /// Validated runtime configuration.
 #[derive(Debug)]
 pub struct Resolved {
-    pub foreground: bool,
-    pub pid_file: String,
-    pub user: Option<String>,
     pub interfaces: Vec<String>,
     pub repeat: bool,
     pub hostname: Option<String>,
@@ -197,9 +185,6 @@ impl Resolved {
             .map(|s| parse_subnet(s))
             .collect::<Result<_, _>>()?;
         Ok(Resolved {
-            foreground: raw.foreground,
-            pid_file: raw.pid_file,
-            user: raw.user,
             interfaces: raw.interfaces,
             repeat: raw.repeat,
             hostname: raw.hostname,

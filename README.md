@@ -90,11 +90,10 @@ The flake also exposes `nixosModules.default` (see
 
 3. Validate, then run:
 
-   ```sh
-   sudo nmdns --check                  # parse + exit
-   sudo nmdns -f                       # foreground, logs to stderr
-   sudo nmdns                          # daemonise
-   ```
+    ```sh
+    sudo nmdns --check                  # parse + exit
+    sudo nmdns                          # run in foreground
+    ```
 
 `nmdns` must start with permission to bind UDP port 5353 and use
 `SO_BINDTODEVICE` — root, or an unprivileged user holding
@@ -105,13 +104,12 @@ with ambient capabilities; no in-process privilege drop is performed).
 ## Usage
 
 ```
-nmdns [-c PATH] [-f] [--check]
+nmdns [-c PATH] [--check]
 ```
 
 | Flag       | Description                                          |
 |------------|------------------------------------------------------|
 | `-c PATH`  | Path to the TOML config (default `/etc/nmdns.toml`). |
-| `-f`       | Foreground; log to stderr instead of syslog.         |
 | `--check`  | Parse and validate the config, then exit.            |
 | `-h`       | Show help.                                           |
 
@@ -123,11 +121,8 @@ nmdns [-c PATH] [-f] [--check]
 | `2`  | Command-line usage error emitted by `clap`. |
 | `10` | Config file load, parse, or structural validation failed. |
 | `11` | Semantic `--check` validation failed, such as an invalid DNS name. |
-| `12` | Another daemon appears to be running from the pidfile. |
-| `13` | Daemonization or pidfile setup failed. |
 | `14` | Tokio runtime creation failed. |
 | `20` | Network interface/socket setup failed. |
-| `21` | Privilege drop failed. |
 | `22` | Service record construction failed during runtime startup. |
 
 A man page is included at [man/nmdns.1](man/nmdns.1):
@@ -156,9 +151,6 @@ reference.
 | `browse_interval_secs` | int             | `60`             | Seconds between browse rounds.                     |
 | `cache_tick_secs`      | int             | `5`              | Cache eviction tick.                               |
 | `max_cache_entries`    | int             | `4096`           | Cache capacity; nearest-to-expiry evicted on full. |
-| `foreground`           | bool            | `false`          | Equivalent to `-f`.                                |
-| `pid_file`             | string          | `/run/nmdns.pid` | Pid file when daemonised.                          |
-| `user`                 | string          | _none_           | Drop privileges to this user.                      |
 | `[[service]]`          | tables          | `[]`             | DNS-SD instances to publish (see below).           |
 
 ### Publishing services
@@ -260,8 +252,6 @@ flowchart TB
   replies and announcements egress on the right link.
 - `hickory-proto` handles DNS message parsing and encoding only; the
   cache, responder, and DNS-SD logic live in this crate.
-- Daemonisation forks **before** the tokio runtime is created (forking
-  worker threads is unsafe).
 
 ### Packet life cycle
 
@@ -294,12 +284,8 @@ sequenceDiagram
 ```mermaid
 stateDiagram-v2
     [*] --> ParseConfig
-    ParseConfig --> Daemonise: foreground = false
-    ParseConfig --> Bind: foreground = true
-    Daemonise --> Bind
-    Bind --> DropPrivs: user set
-    Bind --> RuntimeUp: user unset
-    DropPrivs --> RuntimeUp
+    ParseConfig --> Bind
+    Bind --> RuntimeUp
     RuntimeUp --> Probe: 3× probe queries 250 ms apart (RFC 6762 §8.1)
     Probe --> Announce: announce×2 one second apart (RFC 6762 §8.3)
     Announce --> Serving

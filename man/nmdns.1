@@ -5,7 +5,6 @@ nmdns \- mDNS / DNS\-SD responder, cache, and cross\-interface repeater
 .
 .SH SYNOPSIS
 .B nmdns
-.RB [ \-f ]
 .RB [ \-c
 .IR config ]
 .br
@@ -74,12 +73,6 @@ Default:
 .IR /etc/nmdns.toml .
 .
 .TP
-.B \-f
-Run in the foreground and write log messages to
-.B stderr
-instead of syslog.
-.
-.TP
 .B \-\-check
 Parse and validate the configuration file, print a summary, then exit.
 See
@@ -111,24 +104,12 @@ Semantic
 validation failed, such as an invalid DNS name.
 .
 .TP
-.B 12
-Another daemon appears to be running from the PID file.
-.
-.TP
-.B 13
-Daemonization or PID file setup failed.
-.
-.TP
 .B 14
 Tokio runtime creation failed.
 .
 .TP
 .B 20
 Network interface/socket setup failed.
-.
-.TP
-.B 21
-Privilege drop failed.
 .
 .TP
 .B 22
@@ -201,24 +182,6 @@ records whose TTL has expired.
 .RI "(integer, default: " 4096 ")"
 Upper bound on the number of records held in the cache.  When full,
 the nearest\-to\-expiry entry is evicted to make room for an insert.
-.
-.TP
-.B foreground
-.RI "(bool, default: " false ")"
-Same as the
-.B \-f
-flag.
-.
-.TP
-.B pid_file
-.RI "(string, default: " /run/nmdns.pid ")"
-Path to the PID file written when the daemon is running in the
-background.
-.
-.TP
-.B user
-.RI "(string, default: none)"
-Unix user name the daemon drops privileges to after binding sockets.
 .
 .SS Service tables
 Each
@@ -351,8 +314,6 @@ multicast groups.  Either run as
 .B root
 or grant
 .BR CAP_NET_BIND_SERVICE " and " CAP_NET_RAW .
-After the sockets are bound the daemon drops to the user specified in
-.BR user .
 .
 .PP
 IPv6 mDNS (address

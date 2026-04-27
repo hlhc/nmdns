@@ -76,9 +76,6 @@ fn config_minimal_uses_all_defaults() {
     let r = Resolved::parse(r#"interfaces = ["eth0"]"#).unwrap();
     assert_eq!(r.interfaces, vec!["eth0".to_string()]);
     assert!(r.repeat, "repeat defaults to true");
-    assert!(!r.foreground);
-    assert_eq!(r.pid_file, "/run/nmdns.pid");
-    assert!(r.user.is_none());
     assert!(r.hostname.is_none());
     assert_eq!(r.browse, vec!["_services._dns-sd._udp.local.".to_string()]);
     assert_eq!(r.browse_interval_secs, 60);
@@ -91,9 +88,6 @@ fn config_minimal_uses_all_defaults() {
 #[test]
 fn config_full_round_trip() {
     let toml = r#"
-foreground           = true
-pid_file             = "/tmp/nmdns.pid"
-user                 = "nmdns"
 interfaces           = ["br-lan", "br-iot"]
 repeat               = false
 blacklist            = ["10.0.0.0/8"]
@@ -110,9 +104,6 @@ txt     = ["path=/"]
 host    = "router.local."
 "#;
     let r = Resolved::parse(toml).unwrap();
-    assert!(r.foreground);
-    assert_eq!(r.pid_file, "/tmp/nmdns.pid");
-    assert_eq!(r.user.as_deref(), Some("nmdns"));
     assert_eq!(r.interfaces.len(), 2);
     assert!(!r.repeat);
     assert_eq!(r.hostname.as_deref(), Some("router"));

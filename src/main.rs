@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![deny(unsafe_code)]
+
 use std::path::PathBuf;
 use std::process;
 use std::str::FromStr;
@@ -10,7 +12,7 @@ use clap::Parser;
 use tracing_subscriber::EnvFilter;
 
 use nmdns::config::Resolved;
-use nmdns::{daemon, engine, exit_code, services};
+use nmdns::{engine, exit_code, services};
 
 /// mDNS responder, cache, and cross-interface repeater
 #[derive(Parser, Debug)]
@@ -20,45 +22,17 @@ struct Cli {
     #[arg(short = 'c', long, default_value = "/etc/nmdns.toml")]
     config: PathBuf,
 
-    /// Run in foreground (log to stderr)
-    #[arg(short = 'f', long)]
-    foreground: bool,
-
     /// Parse and validate the config, then exit
     #[arg(long)]
     check: bool,
 }
 
-fn install_logging(foreground: bool) {
+fn install_logging() {
     let env = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
-    if foreground {
-        tracing_subscriber::fmt()
-            .with_env_filter(env)
-            .with_target(false)
-            .init();
-    } else {
-        match syslog_tracing::Syslog::new(
-            c"nmdns",
-            syslog_tracing::Options::LOG_PID,
-            syslog_tracing::Facility::Daemon,
-        ) {
-            Some(syslog) => {
-                tracing_subscriber::fmt()
-                    .with_env_filter(env)
-                    .with_writer(syslog)
-                    .with_target(false)
-                    .with_ansi(false)
-                    .without_time()
-                    .init();
-            }
-            None => {
-                tracing_subscriber::fmt()
-                    .with_env_filter(env)
-                    .with_target(false)
-                    .init();
-            }
-        }
-    }
+    tracing_subscriber::fmt()
+        .with_env_filter(env)
+        .with_target(false)
+        .init();
 }
 
 fn main() {
@@ -96,26 +70,8 @@ fn main() {
         process::exit(exit_code::OK);
     }
 
-    let foreground = cli.foreground || cfg.foreground;
-    let pid_file_path = cfg.pid_file.clone();
+    install_logging();
 
-    let mut wrote_pidfile = false;
-    if !foreground {
-        if let Some(pid) = daemon::already_running(&cfg.pid_file) {
-            eprintln!("nmdns: already running as pid {pid}");
-            process::exit(exit_code::ALREADY_RUNNING);
-        }
-        if let Err(e) = daemon::daemonize(&cfg.pid_file) {
-            eprintln!("nmdns: daemonize: {e}");
-            process::exit(exit_code::DAEMONIZE);
-        }
-        wrote_pidfile = true;
-    }
-
-    install_logging(foreground);
-
-    // Build the multi-threaded runtime *after* daemonize -- fork must not
-    // happen with a tokio runtime alive (it would copy worker threads).
     let rt = match tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -127,8 +83,5 @@ fn main() {
         }
     };
     let exit_code = rt.block_on(engine::run(cfg));
-    if wrote_pidfile {
-        let _ = std::fs::remove_file(&pid_file_path);
-    }
     process::exit(exit_code);
 }

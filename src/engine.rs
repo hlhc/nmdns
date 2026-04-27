@@ -21,7 +21,7 @@ use crate::responder;
 use crate::services;
 use crate::state::{Metrics, State};
 use crate::timing;
-use crate::{browser, daemon};
+use crate::browser;
 
 /// Maximum number of in-flight datagram handlers. Bounds the work the
 /// receive loop will fan out so a query flood can't exhaust resources.
@@ -36,15 +36,6 @@ pub async fn run(cfg: Resolved) -> i32 {
             return exit_code::INTERFACE_SETUP;
         }
     };
-
-    // Drop privileges *after* sockets are bound (they need port 5353 / mcast
-    // join, both privileged on Linux).
-    if let Some(user) = cfg.user.clone() {
-        if let Err(e) = daemon::switch_user(&user) {
-            tracing::error!(user = %user, err = %e, "switch_user failed");
-            return exit_code::PRIVILEGE_DROP;
-        }
-    }
 
     let hostname = services::resolve_hostname(&cfg.hostname);
     let published = match services::build(hostname.clone(), &cfg.services, &ifaces) {
