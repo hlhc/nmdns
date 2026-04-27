@@ -80,13 +80,14 @@ async fn send_queries(state: &Arc<State>, names: &[Name]) {
     };
 
     for iface in &state.ifaces {
-        if let Err(e) = iface.send_mdns(&bytes).await {
-            tracing::debug!(iface = %iface.name, err = %e, "browser: send failed");
-        } else {
-            state
-                .metrics
-                .queries_sent
-                .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        match iface.send_mdns_all(&bytes).await {
+            Ok(sent) => {
+                state
+                    .metrics
+                    .queries_sent
+                    .fetch_add(sent as u64, std::sync::atomic::Ordering::Relaxed);
+            }
+            Err(e) => tracing::debug!(iface = %iface.name, err = %e, "browser: send failed"),
         }
     }
 }

@@ -29,10 +29,10 @@ rustPlatform.buildRustPackage {
     longDescription = ''
       nmdns is a multicast DNS daemon: it announces local services per
       RFC 6762, parses and TTL-tracks records seen on the wire, and can
-      repeat mDNS (224.0.0.251:5353) traffic between two or more network
-      interfaces so service discovery (AirPlay, Chromecast, HomeKit,
-      printers, etc.) crosses L2 segments such as a trusted LAN and an
-      IoT VLAN.
+      repeat IPv4 mDNS (224.0.0.251:5353) and IPv6 mDNS (ff02::fb:5353)
+      traffic between two or more network interfaces so service discovery
+      (AirPlay, Chromecast, HomeKit, printers, etc.) crosses L2 segments
+      such as a trusted LAN and an IoT VLAN.
     '';
     license = with licenses; [ mit asl20 ];
     mainProgram = "nmdns";

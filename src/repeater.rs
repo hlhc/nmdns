@@ -11,7 +11,7 @@ use crate::state::State;
 
 /// Forward `pkt` to every iface that is *not* the receiving iface.
 pub async fn forward(state: &Arc<State>, pkt: &Datagram, recv_iface_idx: Option<usize>) {
-    let from_ip = *pkt.source.ip();
+    let from_ip = pkt.source.ip();
     for (j, iface) in state.ifaces.iter().enumerate() {
         let skip = match recv_iface_idx {
             Some(i) => j == i,
@@ -21,7 +21,7 @@ pub async fn forward(state: &Arc<State>, pkt: &Datagram, recv_iface_idx: Option<
         if skip {
             continue;
         }
-        if let Err(e) = iface.send_mdns(&pkt.data).await {
+        if let Err(e) = iface.send_mdns_on(pkt.family, &pkt.data).await {
             tracing::debug!(iface = %iface.name, err = %e, "repeat send failed");
         } else {
             state
@@ -40,6 +40,6 @@ pub fn identify_recv_iface(pkt: &Datagram, ifaces: &[Arc<Iface>]) -> Option<usiz
             return Some(p);
         }
     }
-    let from = *pkt.source.ip();
+    let from = pkt.source.ip();
     ifaces.iter().position(|i| i.contains(from))
 }
