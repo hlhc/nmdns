@@ -86,6 +86,7 @@ fn candidate_answers(
     let mut seen = HashSet::new();
 
     for q in &msg.queries {
+        let pub_before = answers.len();
         for r in pub_records.answer(q.name(), q.query_type()) {
             // Strip out host address records that do not belong to the
             // interface where the query arrived.
@@ -99,14 +100,31 @@ fn candidate_answers(
             }
             push_unique(&mut answers, &mut seen, r);
         }
+        let from_published = answers.len() - pub_before;
 
+        let mut from_cache = 0usize;
         if state.config.answer_from_cache {
             for r in state
                 .cache
                 .lookup_from_other_ifaces(q.name(), q.query_type(), arrival.ifindex)
             {
+                let before = answers.len();
                 push_unique(&mut answers, &mut seen, r);
+                if answers.len() != before {
+                    from_cache += 1;
+                }
             }
+        }
+
+        if from_published + from_cache > 0 {
+            tracing::debug!(
+                iface = %arrival.name,
+                qname = %q.name(),
+                qtype = %q.query_type(),
+                from_published,
+                from_cache,
+                "candidate answers",
+            );
         }
     }
 

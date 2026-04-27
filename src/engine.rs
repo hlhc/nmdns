@@ -200,9 +200,13 @@ async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published
     // does so.
     match Message::from_vec(&pkt.data) {
         Ok(msg) if msg.metadata.message_type == MessageType::Query => {
+            log_query(state, &msg, &pkt, recv_idx);
             handle_query_msg(state, published, &msg, recv_idx, pkt.family).await;
         }
-        Ok(msg) => handle_response_msg(state, &msg, recv_idx),
+        Ok(msg) => {
+            log_response(state, &msg, &pkt, recv_idx);
+            handle_response_msg(state, &msg, recv_idx);
+        }
         Err(e) => {
             tracing::trace!(from = %from, err = %e, "non-DNS payload");
         }
@@ -228,12 +232,95 @@ async fn handle_query_msg(
 
 fn handle_response_msg(state: &Arc<State>, msg: &Message, recv_idx: Option<usize>) {
     let source_ifindex = recv_idx.map(|idx| state.ifaces[idx].ifindex);
+    let mut inserted = 0usize;
+    let mut refreshed = 0usize;
+    let mut goodbyes = 0usize;
+    let mut rejected = 0usize;
     for ans in msg
         .answers
         .iter()
         .chain(msg.authorities.iter())
         .chain(msg.additionals.iter())
     {
-        let _ = state.cache.insert_from(ans.clone(), source_ifindex);
+        match state.cache.insert_from(ans.clone(), source_ifindex) {
+            crate::cache::InsertOutcome::Inserted => inserted += 1,
+            crate::cache::InsertOutcome::Refreshed => refreshed += 1,
+            crate::cache::InsertOutcome::GoodbyeRemoved => goodbyes += 1,
+            crate::cache::InsertOutcome::Rejected => rejected += 1,
+            crate::cache::InsertOutcome::GoodbyeNoOp => {}
+        }
     }
+    if inserted + refreshed + goodbyes + rejected > 0 {
+        tracing::debug!(
+            inserted,
+            refreshed,
+            goodbyes,
+            rejected,
+            cache_size = state.cache.len(),
+            "cache updated from response",
+        );
+    }
+}
+
+fn log_query(state: &State, msg: &Message, pkt: &Datagram, recv_idx: Option<usize>) {
+    let iface = recv_idx
+        .map(|i| state.ifaces[i].name.as_str())
+        .unwrap_or("?");
+    if tracing::enabled!(tracing::Level::TRACE) {
+        for q in &msg.queries {
+            tracing::trace!(
+                iface,
+                src = %pkt.source,
+                qname = %q.name(),
+                qtype = %q.query_type(),
+                qclass = ?q.query_class(),
+                tc = msg.metadata.truncation,
+                "query",
+            );
+        }
+    }
+    tracing::debug!(
+        iface,
+        src = %pkt.source,
+        family = ?pkt.family,
+        bytes = pkt.data.len(),
+        questions = msg.queries.len(),
+        known_answers = msg.answers.len(),
+        authorities = msg.authorities.len(),
+        "query received",
+    );
+}
+
+fn log_response(state: &State, msg: &Message, pkt: &Datagram, recv_idx: Option<usize>) {
+    let iface = recv_idx
+        .map(|i| state.ifaces[i].name.as_str())
+        .unwrap_or("?");
+    if tracing::enabled!(tracing::Level::TRACE) {
+        for r in msg
+            .answers
+            .iter()
+            .chain(msg.authorities.iter())
+            .chain(msg.additionals.iter())
+        {
+            tracing::trace!(
+                iface,
+                src = %pkt.source,
+                rname = %r.name,
+                rtype = %r.record_type(),
+                ttl = r.ttl,
+                cache_flush = r.mdns_cache_flush,
+                "response record",
+            );
+        }
+    }
+    tracing::debug!(
+        iface,
+        src = %pkt.source,
+        family = ?pkt.family,
+        bytes = pkt.data.len(),
+        answers = msg.answers.len(),
+        authorities = msg.authorities.len(),
+        additionals = msg.additionals.len(),
+        "response received",
+    );
 }
