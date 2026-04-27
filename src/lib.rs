@@ -12,6 +12,7 @@ pub mod cache;
 pub mod config;
 pub mod daemon;
 pub mod engine;
+pub mod exit_code;
 pub mod iface;
 pub mod record_key;
 pub mod repeater;

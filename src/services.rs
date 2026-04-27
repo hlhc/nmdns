@@ -77,10 +77,7 @@ pub fn resolve_hostname(explicit: &Option<String>) -> Name {
 /// label, malformed service type, illegal host override) surface before
 /// daemonization, where `build` would otherwise be the first to call
 /// `Name::from_str`.
-pub fn validate(
-    hostname: &Name,
-    services: &[ServiceConfig],
-) -> Result<(), ServiceError> {
+pub fn validate(hostname: &Name, services: &[ServiceConfig]) -> Result<(), ServiceError> {
     let _ = hostname; // already validated by `resolve_hostname`
     Name::from_str("_services._dns-sd._udp.local.").map_err(ServiceError::Internal)?;
     for sc in services {

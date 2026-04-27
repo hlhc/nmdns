@@ -115,6 +115,21 @@ nmdns [-c PATH] [-f] [--check]
 | `--check`  | Parse and validate the config, then exit.            |
 | `-h`       | Show help.                                           |
 
+### Exit Codes
+
+| Code | Meaning |
+|------|---------|
+| `0`  | Success. |
+| `2`  | Command-line usage error emitted by `clap`. |
+| `10` | Config file load, parse, or structural validation failed. |
+| `11` | Semantic `--check` validation failed, such as an invalid DNS name. |
+| `12` | Another daemon appears to be running from the pidfile. |
+| `13` | Daemonization or pidfile setup failed. |
+| `14` | Tokio runtime creation failed. |
+| `20` | Network interface/socket setup failed. |
+| `21` | Privilege drop failed. |
+| `22` | Service record construction failed during runtime startup. |
+
 A man page is included at [man/nmdns.1](man/nmdns.1):
 
 ```sh

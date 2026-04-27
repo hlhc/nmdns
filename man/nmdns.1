@@ -82,11 +82,57 @@ instead of syslog.
 .TP
 .B \-\-check
 Parse and validate the configuration file, print a summary, then exit.
-Returns exit code\ 0 on success, 1 on error.
+See
+.B EXIT STATUS
+for error codes.
 .
 .TP
 .B \-h ", " \-\-help
 Print a short usage summary and exit.
+.
+.SH EXIT STATUS
+.TP
+.B 0
+Success.
+.
+.TP
+.B 2
+Command\-line usage error emitted by
+.BR clap .
+.
+.TP
+.B 10
+Configuration file load, parse, or structural validation failed.
+.
+.TP
+.B 11
+Semantic
+.B \-\-check
+validation failed, such as an invalid DNS name.
+.
+.TP
+.B 12
+Another daemon appears to be running from the PID file.
+.
+.TP
+.B 13
+Daemonization or PID file setup failed.
+.
+.TP
+.B 14
+Tokio runtime creation failed.
+.
+.TP
+.B 20
+Network interface/socket setup failed.
+.
+.TP
+.B 21
+Privilege drop failed.
+.
+.TP
+.B 22
+Service record construction failed during runtime startup.
 .
 .SH CONFIGURATION
 The configuration file uses
@@ -297,21 +343,6 @@ Validate the config and exit:
 nmdns \-\-check \-c /etc/nmdns.toml
 .EE
 .RE
-.
-.SH EXIT STATUS
-.TP
-.B 0
-Success (or
-.B \-\-check
-passed).
-.
-.TP
-.B 1
-Startup error (bad config, socket bind failure, etc.).
-.
-.TP
-.B 2
-Usage error (unknown flag, missing argument).
 .
 .SH NOTES
 .B nmdns
