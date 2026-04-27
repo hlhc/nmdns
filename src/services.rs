@@ -75,7 +75,7 @@ pub fn resolve_hostname(explicit: &Option<String>) -> Name {
 /// Parse and validate every service-derived `Name` without binding any
 /// sockets. Used by `--check` so configuration mistakes (bad instance
 /// label, malformed service type, illegal host override) surface before
-/// daemonization, where `build` would otherwise be the first to call
+/// runtime startup, where `build` would otherwise be the first to call
 /// `Name::from_str`.
 pub fn validate(hostname: &Name, services: &[ServiceConfig]) -> Result<(), ServiceError> {
     let _ = hostname; // already validated by `resolve_hostname`

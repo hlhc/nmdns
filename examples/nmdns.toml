@@ -2,15 +2,6 @@
 #
 # Place at /etc/nmdns.toml (or pass with `nmdns -c PATH`).
 
-# Run in foreground (log to stderr) instead of daemonizing.
-foreground = false
-
-# PID file (only used when daemonizing).
-pid_file = "/run/nmdns.pid"
-
-# Drop privileges to this user after binding sockets.
-# user = "nmdns"
-
 # Interfaces to operate on. mDNS will be received and (with `repeat = true`)
 # forwarded between every pair. Each interface must have an IPv4 address.
 interfaces = ["br-lan", "br-iot"]

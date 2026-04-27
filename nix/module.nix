@@ -7,7 +7,6 @@ let
   # Build the TOML config from typed options. Anything passed in `settings`
   # is merged on top, so users can set fields the module doesn't expose.
   baseSettings = {
-    foreground = true; # systemd handles supervision
     interfaces = cfg.interfaces;
     repeat = cfg.repeat;
     blacklist = cfg.blacklist;
@@ -178,7 +177,7 @@ in
 
       serviceConfig = {
         Type = "simple";
-        ExecStart = "${pkg}/bin/nmdns -f -c ${configFile}";
+        ExecStart = "${pkg}/bin/nmdns -c ${configFile}";
         Restart = "on-failure";
         RestartSec = 5;
 

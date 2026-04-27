@@ -7,10 +7,11 @@
 //
 // SPDX-License-Identifier: MIT OR Apache-2.0
 
+#![deny(unsafe_code)]
+
 pub mod browser;
 pub mod cache;
 pub mod config;
-pub mod daemon;
 pub mod engine;
 pub mod exit_code;
 pub mod iface;
