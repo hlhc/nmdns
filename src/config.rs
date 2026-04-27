@@ -39,6 +39,8 @@ struct RawConfig {
     interfaces: Vec<String>,
     #[serde(default = "default_true")]
     repeat: bool,
+    #[serde(default = "default_true")]
+    answer_from_cache: bool,
     #[serde(default)]
     blacklist: Vec<String>,
     #[serde(default)]
@@ -141,6 +143,7 @@ pub fn parse_subnet(s: &str) -> Result<Subnet, ConfigError> {
 pub struct Resolved {
     pub interfaces: Vec<String>,
     pub repeat: bool,
+    pub answer_from_cache: bool,
     pub hostname: Option<String>,
     pub browse: Vec<String>,
     pub browse_interval_secs: u64,
@@ -187,6 +190,7 @@ impl Resolved {
         Ok(Resolved {
             interfaces: raw.interfaces,
             repeat: raw.repeat,
+            answer_from_cache: raw.answer_from_cache,
             hostname: raw.hostname,
             browse: raw.browse,
             browse_interval_secs: raw.browse_interval_secs,
@@ -238,6 +242,7 @@ mod tests {
         let r = Resolved::parse(r#"interfaces = ["eth0"]"#).unwrap();
         assert_eq!(r.interfaces, vec!["eth0"]);
         assert!(r.repeat);
+        assert!(r.answer_from_cache);
         assert_eq!(r.browse, vec!["_services._dns-sd._udp.local."]);
         assert!(r.services.is_empty());
     }

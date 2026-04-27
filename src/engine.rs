@@ -12,6 +12,7 @@ use tokio::sync::Semaphore;
 use tokio::time::{interval, MissedTickBehavior};
 use tokio_util::sync::CancellationToken;
 
+use crate::browser;
 use crate::cache::{Cache, InsertOutcome};
 use crate::config::Resolved;
 use crate::exit_code;
@@ -21,7 +22,6 @@ use crate::responder;
 use crate::services;
 use crate::state::{Metrics, State};
 use crate::timing;
-use crate::browser;
 
 /// Maximum number of in-flight datagram handlers. Bounds the work the
 /// receive loop will fan out so a query flood can't exhaust resources.
@@ -209,7 +209,7 @@ async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published
         Ok(msg) if msg.metadata.message_type == MessageType::Query => {
             handle_query_msg(state, published, &msg, recv_idx).await;
         }
-        Ok(msg) => handle_response_msg(state, &msg),
+        Ok(msg) => handle_response_msg(state, &msg, recv_idx),
         Err(e) => {
             state.metrics.parse_errors.fetch_add(1, Ordering::Relaxed);
             tracing::trace!(from = %from, err = %e, "non-DNS payload");
@@ -237,9 +237,15 @@ async fn handle_query_msg(
     }
 }
 
-fn handle_response_msg(state: &Arc<State>, msg: &Message) {
-    for ans in msg.answers.iter().chain(msg.additionals.iter()) {
-        match state.cache.insert(ans.clone()) {
+fn handle_response_msg(state: &Arc<State>, msg: &Message, recv_idx: Option<usize>) {
+    let source_ifindex = recv_idx.map(|idx| state.ifaces[idx].ifindex);
+    for ans in msg
+        .answers
+        .iter()
+        .chain(msg.authorities.iter())
+        .chain(msg.additionals.iter())
+    {
+        match state.cache.insert_from(ans.clone(), source_ifindex) {
             InsertOutcome::GoodbyeRemoved => {
                 state.metrics.cache_goodbyes.fetch_add(1, Ordering::Relaxed);
             }

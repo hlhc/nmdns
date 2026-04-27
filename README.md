@@ -17,9 +17,8 @@ and [hickory-proto](https://crates.io/crates/hickory-proto).
 ## Features
 
 - **Cache** — every record seen on any interface is parsed and stored
-  with TTL for diagnostics and TTL tracking. (Wire responses are served
-  only from records the daemon publishes itself; cache contents are not
-  yet returned to remote queriers.)
+  with TTL for diagnostics, TTL tracking, and cached responses on other
+  interfaces.
 - **Respond** — serves `A`, `PTR`, `SRV`, and `TXT` queries for the
   host's own `*.local.` name and any services declared in the config.
 - **Browse** — periodically issues `PTR` queries for configured service
@@ -144,6 +143,7 @@ reference.
 |------------------------|-----------------|------------------|----------------------------------------------------|
 | `interfaces`           | list of strings | _required_       | Interfaces to listen / respond on.                 |
 | `repeat`               | bool            | `true`           | Forward unparsed mDNS between interfaces.          |
+| `answer_from_cache`    | bool            | `true`           | Answer queries from records learned on other interfaces. |
 | `hostname`             | string          | system hostname  | Advertised as `<hostname>.local.`.                 |
 | `blacklist`            | list of CIDRs   | `[]`             | Drop packets from these source nets.               |
 | `whitelist`            | list of CIDRs   | `[]`             | If non-empty, only accept these.                   |
@@ -179,6 +179,16 @@ the responder and the repeater.
 ```toml
 whitelist = ["192.168.10.0/24", "192.168.20.0/24"]
 ```
+
+### Cached responses
+
+When `answer_from_cache = true`, queries can be answered from records
+previously learned on another managed interface. This lets the daemon act
+as a cache-backed responder even when `repeat = false`; the active browser
+keeps common DNS-SD service records warm by default.
+
+Cached answers are not sent back onto the same interface where the record
+was learned, since devices on that link can answer for themselves.
 
 ## NixOS module
 

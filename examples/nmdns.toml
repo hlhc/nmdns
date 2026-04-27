@@ -10,6 +10,11 @@ interfaces = ["br-lan", "br-iot"]
 # interfaces. Set to false for pure responder-only operation.
 repeat = true
 
+# Cache-backed responses: answer queries from records learned on other
+# monitored interfaces. This is useful with repeat=false when you want
+# nmdns to respond from its cache instead of forwarding raw multicast.
+answer_from_cache = true
+
 # Source filters. Whitelist takes precedence; only one of the two may be set.
 blacklist = []
 # whitelist = ["192.168.1.0/24"]

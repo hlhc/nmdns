@@ -9,6 +9,7 @@ let
   baseSettings = {
     interfaces = cfg.interfaces;
     repeat = cfg.repeat;
+    answer_from_cache = cfg.answerFromCache;
     blacklist = cfg.blacklist;
     whitelist = cfg.whitelist;
     browse = cfg.browse;
@@ -45,6 +46,16 @@ in
       description = ''
         Forward unparsed/unknown mDNS traffic between interfaces. Set to
         false for pure responder-only operation.
+      '';
+    };
+
+    answerFromCache = lib.mkOption {
+      type = lib.types.bool;
+      default = true;
+      description = ''
+        Answer queries from records learned on another configured interface.
+        Records are not answered back onto the same interface where they were
+        learned.
       '';
     };
 
