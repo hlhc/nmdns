@@ -532,10 +532,11 @@ fn do_recvmsg_v4(fd: RawFd) -> io::Result<Datagram> {
     };
 
     let mut recv_ifindex = None;
+    #[allow(clippy::unnecessary_cast)]
     if let Ok(iter) = msg.cmsgs() {
         for c in iter {
             if let ControlMessageOwned::Ipv4PacketInfo(p) = c {
-                recv_ifindex = Some(p.ipi_ifindex);
+                recv_ifindex = Some(p.ipi_ifindex as u32);
             }
         }
     }
@@ -569,10 +570,11 @@ fn do_recvmsg_v6(fd: RawFd) -> io::Result<Datagram> {
     };
 
     let mut recv_ifindex = None;
+    #[allow(clippy::unnecessary_cast)]
     if let Ok(iter) = msg.cmsgs() {
         for c in iter {
             if let ControlMessageOwned::Ipv6PacketInfo(p) = c {
-                recv_ifindex = Some(p.ipi6_ifindex);
+                recv_ifindex = Some(p.ipi6_ifindex as u32);
             }
         }
     }
