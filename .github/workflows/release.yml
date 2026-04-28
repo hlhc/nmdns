@@ -12,6 +12,7 @@ on:
 
 permissions:
   contents: write
+  id-token: write
 
 env:
   CARGO_TERM_COLOR: always
@@ -108,17 +109,14 @@ jobs:
           cp examples/nmdns.toml "${staging}/nmdns.example.toml"
           tar -C dist -czf "${name}.tar.gz" "${name}"
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
-          echo "asset=${name}.tar.gz" >> "$GITHUB_OUTPUT"
-          echo "checksum=${name}.tar.gz.sha256" >> "$GITHUB_OUTPUT"
 
-      - name: Upload assets
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload "${{ needs.create-release.outputs.tag }}" \
-            "${{ steps.package.outputs.asset }}" \
-            "${{ steps.package.outputs.checksum }}" \
-            --clobber
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}-assets
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 1
 
   nix-build:
     name: nix build (${{ matrix.system }})
@@ -134,10 +132,53 @@ jobs:
             os: macos-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: cachix/install-nix-action@v27
+      - uses: cachix/install-nix-action@v31
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
-      - run: nix flake check --print-build-logs
+      - name: Pull from S3 cache
+        if: vars.S3_NIX_CACHE_URL != ''
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        run: |
+          nix copy --from "${{ vars.S3_NIX_CACHE_URL }}" .#nmdns || true
       - run: nix build .#nmdns --print-build-logs
+      - name: Package nix artifact
+        shell: bash
+        run: |
+          tag="${{ needs.create-release.outputs.tag }}"
+          name="nmdns-${tag}-${{ matrix.system }}"
+          staging="dist/${name}"
+          mkdir -p "${staging}"
+          cp -r result/bin "${staging}/"
+          cp -r result/share "${staging}/" 2>/dev/null || true
+          tar -C dist -czf "${name}.tar.gz" "${name}"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.system }}-assets
+          path: |
+            dist/*.tar.gz
+            dist/*.sha256
+          retention-days: 1
+
+  upload-release:
+    name: Create GitHub release
+    needs: [create-release, build-binaries, nix-build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.create-release.outputs.tag }}
+          name: ${{ needs.create-release.outputs.tag }}
+          generate_release_notes: true
+          files: |
+            dist/*.tar.gz
+            dist/*.sha256
