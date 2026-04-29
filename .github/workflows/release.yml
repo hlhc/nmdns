@@ -140,6 +140,7 @@ jobs:
       - name: Configure S3 substituter
         if: vars.S3_NIX_CACHE_URL != ''
         run: |
+          mkdir -p ~/.config/nix
           echo "substituters = ${{ vars.S3_NIX_CACHE_URL }}" >> ~/.config/nix/nix.conf
           echo "trusted-public-keys = ${{ vars.NIX_CACHE_PUBLIC_KEY }}" >> ~/.config/nix/nix.conf
       - run: nix build .#nmdns --print-build-logs
