@@ -31,3 +31,8 @@ tmp/
 
 # Generated files
 result
+
+# Nix binary cache signing keys
+.nix-cache-key
+*.cache-key
+*cache-priv-key.pem

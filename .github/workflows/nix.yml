@@ -47,6 +47,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
+      - name: Configure S3 substituter
+        if: vars.S3_NIX_CACHE_URL != ''
+        run: |
+          echo "substituters = ${{ vars.S3_NIX_CACHE_URL }}" >> ~/.config/nix/nix.conf
+          echo "trusted-public-keys = ${{ vars.NIX_CACHE_PUBLIC_KEY }}" >> ~/.config/nix/nix.conf
       - name: Show flake metadata
         run: nix flake metadata
       - name: Flake check
@@ -61,4 +66,6 @@ jobs:
           AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
           AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
+          echo "${{ secrets.NIX_CACHE_SECRET_KEY }}" > /tmp/cache.key
+          nix sign-paths --key-file /tmp/cache.key ./result
           nix copy --to "${{ vars.S3_NIX_CACHE_URL }}" ./result

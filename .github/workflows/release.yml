@@ -137,13 +137,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
             accept-flake-config = true
-      - name: Pull from S3 cache
+      - name: Configure S3 substituter
         if: vars.S3_NIX_CACHE_URL != ''
-        env:
-          AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
-          AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
         run: |
-          nix copy --from "${{ vars.S3_NIX_CACHE_URL }}" .#nmdns || true
+          echo "substituters = ${{ vars.S3_NIX_CACHE_URL }}" >> ~/.config/nix/nix.conf
+          echo "trusted-public-keys = ${{ vars.NIX_CACHE_PUBLIC_KEY }}" >> ~/.config/nix/nix.conf
       - run: nix build .#nmdns --print-build-logs
       - name: Package nix artifact
         shell: bash
