@@ -49,11 +49,10 @@ jobs:
             accept-flake-config = true
       - name: Configure S3 substituter
         if: vars.S3_NIX_CACHE_URL != ''
-
         run: |
           mkdir -p ~/.config/nix
-          echo "substituters = ${{ vars.S3_NIX_CACHE_URL }}" >> ~/.config/nix/nix.conf
-          echo "trusted-public-keys = ${{ vars.NIX_CACHE_PUBLIC_KEY }}" >> ~/.config/nix/nix.conf
+          echo "extra-substituters = ${{ vars.S3_NIX_CACHE_URL }}" >> ~/.config/nix/nix.conf
+          echo "extra-trusted-public-keys = ${{ vars.NIX_CACHE_PUBLIC_KEY }}" >> ~/.config/nix/nix.conf
       - name: Show flake metadata
         run: nix flake metadata
       - name: Flake check
