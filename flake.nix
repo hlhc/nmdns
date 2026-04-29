@@ -4,16 +4,29 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
+
+    rust-overlay = {
+      url = "github:oxalica/rust-overlay";
+      inputs.nixpkgs.follows = "nixpkgs";
+    };
   };
 
-  outputs = { self, nixpkgs, flake-utils }:
+  outputs = { self, nixpkgs, flake-utils, rust-overlay }:
     let
       systems = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
     in
     {
-      overlays.default = final: prev: {
-        nmdns = final.callPackage ./nix/package.nix { };
-      };
+      overlays.default = final: prev:
+        let
+          rustToolchain = final.rust-bin.stable.latest.default;
+          rustPlatform = final.makeRustPlatform {
+            cargo = rustToolchain;
+            rustc = rustToolchain;
+          };
+        in
+        {
+          nmdns = final.callPackage ./nix/package.nix { inherit rustPlatform; };
+        };
 
       nixosModules.default = ./nix/module.nix;
       nixosModules.nmdns = ./nix/module.nix;
@@ -21,8 +34,12 @@
       let
         pkgs = import nixpkgs {
           inherit system;
-          overlays = [ self.overlays.default ];
+          overlays = [
+            rust-overlay.overlays.default
+            self.overlays.default
+          ];
         };
+        rustToolchain = pkgs.rust-bin.stable.latest.default;
       in
       {
         packages = {
@@ -36,14 +53,13 @@
         };
 
         devShells.default = pkgs.mkShell {
-          packages = with pkgs; [
-            cargo
-            rustc
-            rustfmt
-            clippy
-            rust-analyzer
+          packages = [
+            rustToolchain
+            pkgs.rustfmt
+            pkgs.clippy
+            pkgs.rust-analyzer
           ];
-          RUST_SRC_PATH = "${pkgs.rustPlatform.rustLibSrc}";
+          RUST_SRC_PATH = "${rustToolchain}/lib/rustlib/src/rust/library";
         };
 
         checks.build = pkgs.nmdns;

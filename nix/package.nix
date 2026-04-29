@@ -1,9 +1,21 @@
 { lib
-, rustPlatform
+, rustPlatform ? null
 , installShellFiles
+, rust-bin
+, makeRustPlatform
 }:
 
-rustPlatform.buildRustPackage {
+let
+  effectiveRustPlatform =
+    if rustPlatform != null
+    then rustPlatform
+    else makeRustPlatform {
+      cargo = rust-bin.stable.latest.default;
+      rustc = rust-bin.stable.latest.default;
+    };
+in
+
+effectiveRustPlatform.buildRustPackage {
   pname = "nmdns";
   version = "0.2.0";
 
