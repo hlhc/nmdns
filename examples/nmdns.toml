@@ -41,6 +41,12 @@ browse_interval_secs = 60
 # Cache eviction tick (seconds).
 cache_tick_secs = 5
 
+# Maximum TTL (seconds) applied to cached records. When set, any record
+# stored in the cache has its TTL capped to this value, limiting the window
+# for cache poisoning on cross-interface bridges. Set to 0 or leave
+# unset to preserve original TTLs. Typical values: 120–300.
+# cache_max_ttl_secs = 300
+
 # Maximum number of records held in the cache. When full, the nearest-to-
 # expiry entry is evicted to make room for a new insert.
 # max_cache_entries = 4096

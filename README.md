@@ -151,6 +151,7 @@ reference.
 | `browse_interval_secs` | int             | `60`             | Seconds between browse rounds.                     |
 | `cache_tick_secs`      | int             | `5`              | Cache eviction tick.                               |
 | `max_cache_entries`    | int             | `4096`           | Cache capacity; nearest-to-expiry evicted on full. |
+| `cache_max_ttl_secs`  | int             | _unset_ (no cap) | Cap cached record TTLs to this many seconds. Limits cache-poisoning persistence on cross-interface bridges. |
 | `[[service]]`          | tables          | `[]`             | DNS-SD instances to publish (see below).           |
 
 ### Publishing services
@@ -189,6 +190,20 @@ keeps common DNS-SD service records warm by default.
 
 Cached answers are not sent back onto the same interface where the record
 was learned, since devices on that link can answer for themselves.
+
+### Cache poisoning mitigation
+
+When `answer_from_cache` is enabled, records learned on one interface are
+served to clients on other interfaces. A malicious device on any monitored
+link can inject arbitrary DNS records that propagate across all bridges.
+
+Set `cache_max_ttl_secs` to cap how long cached records persist — for
+example, `cache_max_ttl_secs = 300` limits even a DNS-SD service record
+(whose default TTL is 4500 s / 75 min) to 5 minutes. This is a security
+trade-off: lower caps reduce the poisoning window but also shorten the
+lifetime of legitimate long-lived records. Values must be between 1 and
+4294967295; a value of 0 is rejected because it would clear the cache on every
+insert.
 
 ## NixOS module
 

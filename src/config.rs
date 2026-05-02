@@ -13,6 +13,11 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
+/// Maximum allowed value for `cache_max_ttl_secs`.
+/// DNS TTL is a 32-bit unsigned integer (RFC 2181 §5), so the cap must
+/// fit in `u32`.
+pub const MAX_CACHE_TTL_SECS: u64 = u32::MAX as u64;
+
 #[derive(Debug, Error)]
 pub enum ConfigError {
     #[error("read config {path}: {source}")]
@@ -29,6 +34,8 @@ pub enum ConfigError {
     NoInterfaces,
     #[error("blacklist and whitelist are mutually exclusive")]
     BlackAndWhite,
+    #[error("cache_max_ttl_secs must be between 1 and {max}, got {value}")]
+    BadCacheMaxTtl { value: u64, max: u64 },
 }
 
 /// Raw TOML shape; produced by serde, then post-validated into [`Resolved`].
@@ -54,6 +61,8 @@ struct RawConfig {
     cache_tick_secs: u64,
     #[serde(default = "default_max_cache_entries")]
     max_cache_entries: usize,
+    #[serde(default)]
+    cache_max_ttl_secs: Option<u64>,
     #[serde(default, rename = "service")]
     services: Vec<ServiceConfig>,
 }
@@ -190,6 +199,7 @@ pub struct Resolved {
     pub browse_interval_secs: u64,
     pub cache_tick_secs: u64,
     pub max_cache_entries: usize,
+    pub cache_max_ttl_secs: Option<u64>,
     pub services: Vec<ServiceConfig>,
     pub blacklist: Vec<Subnet>,
     pub whitelist: Vec<Subnet>,
@@ -228,6 +238,14 @@ impl Resolved {
             .iter()
             .map(|s| parse_subnet(s))
             .collect::<Result<_, _>>()?;
+        if let Some(ttl) = raw.cache_max_ttl_secs {
+            if ttl == 0 || ttl > MAX_CACHE_TTL_SECS {
+                return Err(ConfigError::BadCacheMaxTtl {
+                    value: ttl,
+                    max: MAX_CACHE_TTL_SECS,
+                });
+            }
+        }
         Ok(Resolved {
             interfaces: raw.interfaces,
             repeat: raw.repeat,
@@ -237,6 +255,7 @@ impl Resolved {
             browse_interval_secs: raw.browse_interval_secs,
             cache_tick_secs: raw.cache_tick_secs,
             max_cache_entries: raw.max_cache_entries,
+            cache_max_ttl_secs: raw.cache_max_ttl_secs,
             services: raw.services,
             blacklist,
             whitelist,
@@ -342,5 +361,59 @@ mod tests {
     fn parse_subnet_rejects_bad_ipv6() {
         assert!(parse_subnet("::1/129").is_err());
         assert!(parse_subnet("::ffff/abc").is_err());
+    }
+
+    #[test]
+    fn config_cache_max_ttl_secs_defaults_to_none() {
+        let r = Resolved::parse(r#"interfaces = ["eth0"]"#).unwrap();
+        assert!(r.cache_max_ttl_secs.is_none());
+    }
+
+    #[test]
+    fn config_cache_max_ttl_secs_set() {
+        let r = Resolved::parse(
+            r#"
+            interfaces = ["eth0"]
+            cache_max_ttl_secs = 300
+            "#,
+        )
+        .unwrap();
+        assert_eq!(r.cache_max_ttl_secs, Some(300));
+    }
+
+    #[test]
+    fn config_cache_max_ttl_secs_rejects_zero() {
+        let r = Resolved::parse(
+            r#"
+            interfaces = ["eth0"]
+            cache_max_ttl_secs = 0
+            "#,
+        );
+        assert!(matches!(r, Err(ConfigError::BadCacheMaxTtl { .. })));
+    }
+
+    #[test]
+    fn config_cache_max_ttl_secs_rejects_overflow() {
+        let r = Resolved::parse(&format!(
+            r#"
+            interfaces = ["eth0"]
+            cache_max_ttl_secs = {}
+            "#,
+            u32::MAX as u64 + 1
+        ));
+        assert!(matches!(r, Err(ConfigError::BadCacheMaxTtl { .. })));
+    }
+
+    #[test]
+    fn config_cache_max_ttl_secs_accepts_u32_max() {
+        let r = Resolved::parse(&format!(
+            r#"
+            interfaces = ["eth0"]
+            cache_max_ttl_secs = {}
+            "#,
+            u32::MAX as u64
+        ))
+        .unwrap();
+        assert_eq!(r.cache_max_ttl_secs, Some(u32::MAX as u64));
     }
 }

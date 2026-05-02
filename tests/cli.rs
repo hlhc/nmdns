@@ -397,3 +397,55 @@ whitelist  = ["fe80::/129"]
         .code(exit_code::CONFIG)
         .stderr(predicate::str::contains("mask"));
 }
+
+#[test]
+fn cache_max_ttl_secs_zero_rejected() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+cache_max_ttl_secs = 0
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .failure()
+        .code(exit_code::CONFIG)
+        .stderr(predicate::str::contains("cache_max_ttl_secs"));
+}
+
+#[test]
+fn cache_max_ttl_secs_too_large_rejected() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+cache_max_ttl_secs = 4294967296
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .failure()
+        .code(exit_code::CONFIG)
+        .stderr(predicate::str::contains("cache_max_ttl_secs"));
+}
+
+#[test]
+fn cache_max_ttl_secs_valid_accepted() {
+    let f = write_config(
+        r#"
+interfaces = ["eth0"]
+cache_max_ttl_secs = 300
+"#,
+    );
+    nmdns()
+        .args(["-c"])
+        .arg(f.path())
+        .arg("--check")
+        .assert()
+        .success();
+}

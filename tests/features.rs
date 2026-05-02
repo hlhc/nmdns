@@ -394,6 +394,28 @@ fn cache_lookup_returns_remaining_ttl() {
     assert!(hits[0].ttl > 0);
 }
 
+#[test]
+fn cache_max_ttl_caps_stored_ttl() {
+    let c = Cache::with_capacity_and_max_ttl(100, Some(60));
+    c.insert(a_record("foo.local.", 4500, [1, 2, 3, 4]));
+    let hits = c.lookup(&host("foo.local."), RecordType::A);
+    assert_eq!(hits.len(), 1);
+    assert!(
+        hits[0].ttl <= 60,
+        "TTL should be capped, got {}",
+        hits[0].ttl
+    );
+}
+
+#[test]
+fn cache_max_ttl_preserves_ttl_below_cap() {
+    let c = Cache::with_capacity_and_max_ttl(100, Some(300));
+    c.insert(a_record("foo.local.", 120, [1, 2, 3, 4]));
+    let hits = c.lookup(&host("foo.local."), RecordType::A);
+    assert_eq!(hits.len(), 1);
+    assert!(hits[0].ttl <= 120, "TTL below cap should be preserved");
+}
+
 // --------------------------------------------------------------------
 // services & responder logic (Published::answer)
 // --------------------------------------------------------------------

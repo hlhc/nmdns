@@ -52,7 +52,7 @@ pub async fn run(cfg: Resolved) -> i32 {
     );
 
     let state = Arc::new(State {
-        cache: Cache::with_capacity(cfg.max_cache_entries),
+        cache: Cache::with_capacity_and_max_ttl(cfg.max_cache_entries, cfg.cache_max_ttl_secs),
         config: cfg,
         ifaces,
         shutdown: CancellationToken::new(),

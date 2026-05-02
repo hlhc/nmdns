@@ -48,6 +48,7 @@ pub struct Cache {
 struct Inner {
     by_key: HashMap<RecordKey, Entry>,
     max_entries: usize,
+    max_ttl: Option<u64>,
 }
 
 impl Cache {
@@ -56,10 +57,15 @@ impl Cache {
     }
 
     pub fn with_capacity(max_entries: usize) -> Self {
+        Self::with_capacity_and_max_ttl(max_entries, None)
+    }
+
+    pub fn with_capacity_and_max_ttl(max_entries: usize, max_ttl: Option<u64>) -> Self {
         Self {
             inner: Mutex::new(Inner {
                 by_key: HashMap::new(),
                 max_entries: max_entries.max(1),
+                max_ttl,
             }),
         }
     }
@@ -75,12 +81,28 @@ impl Cache {
     /// When the cache is at capacity the soonest-to-expire entry is
     /// evicted to make room; if no entries are close to expiring the new
     /// record is rejected. This bounds memory growth from a hostile peer.
-    pub fn insert_from(&self, record: Record, source_ifindex: Option<u32>) -> InsertOutcome {
+    ///
+    /// If `max_ttl` is configured, the record's TTL is capped before storage,
+    /// limiting how long a cached (potentially poisoned) record can persist.
+    /// This is a security trade-off: lower caps reduce the window for cache
+    /// poisoning on cross-interface bridges but also shorten the TTL of
+    /// legitimate long-lived service records. Goodbye (TTL=0) records are
+    /// never capped so they always correctly evict the matching entry.
+    pub fn insert_from(&self, mut record: Record, source_ifindex: Option<u32>) -> InsertOutcome {
         let key = RecordKey::of(&record);
-        let ttl = record.ttl;
         let mut g = self.inner.lock().unwrap();
 
-        if ttl == 0 {
+        // Cap the TTL before any decisions. Goodbye (TTL=0) records are
+        // never capped so they always correctly evict the matching entry.
+        // `max_ttl` is guaranteed by config validation to be in 1..=u32::MAX,
+        // so the `as u32` cast is safe.
+        if record.ttl > 0 {
+            if let Some(cap) = g.max_ttl {
+                record.ttl = record.ttl.min(cap as u32);
+            }
+        }
+
+        if record.ttl == 0 {
             return if g.by_key.remove(&key).is_some() {
                 InsertOutcome::GoodbyeRemoved
             } else {
@@ -88,7 +110,7 @@ impl Cache {
             };
         }
 
-        let deadline = Instant::now() + Duration::from_secs(ttl as u64);
+        let deadline = Instant::now() + Duration::from_secs(record.ttl as u64);
 
         use std::collections::hash_map::Entry as HEntry;
         if let HEntry::Occupied(mut e) = g.by_key.entry(key.clone()) {
@@ -225,7 +247,7 @@ impl Default for Cache {
 mod tests {
     use super::*;
     use hickory_proto::rr::rdata::{A, AAAA};
-    use hickory_proto::rr::RData;
+    use hickory_proto::rr::{RData, RecordType};
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -332,5 +354,61 @@ mod tests {
             InsertOutcome::Rejected
         );
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn max_ttl_caps_stored_ttl() {
+        let c = Cache::with_capacity_and_max_ttl(100, Some(60));
+        assert_eq!(
+            c.insert(rec("foo.local.", 4500, [1, 2, 3, 4])),
+            InsertOutcome::Inserted
+        );
+        let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A);
+        assert_eq!(hits.len(), 1);
+        assert!(
+            hits[0].ttl <= 60,
+            "TTL should be capped to 60, got {}",
+            hits[0].ttl
+        );
+    }
+
+    #[test]
+    fn max_ttl_does_not_cap_below_actual() {
+        let c = Cache::with_capacity_and_max_ttl(100, Some(300));
+        assert_eq!(
+            c.insert(rec("foo.local.", 120, [1, 2, 3, 4])),
+            InsertOutcome::Inserted
+        );
+        let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ttl <= 120, "TTL below cap should be preserved");
+    }
+
+    #[test]
+    fn max_ttl_does_not_cap_goodbye() {
+        let c = Cache::with_capacity_and_max_ttl(100, Some(60));
+        c.insert(rec("foo.local.", 120, [1, 2, 3, 4]));
+        assert_eq!(
+            c.insert(rec("foo.local.", 0, [1, 2, 3, 4])),
+            InsertOutcome::GoodbyeRemoved
+        );
+        assert_eq!(c.len(), 0);
+    }
+
+    #[test]
+    fn no_max_ttl_preserves_original() {
+        let c = Cache::with_capacity_and_max_ttl(100, None);
+        assert_eq!(
+            c.insert(rec("foo.local.", 4500, [1, 2, 3, 4])),
+            InsertOutcome::Inserted
+        );
+        let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A);
+        assert_eq!(hits.len(), 1);
+        assert!(hits[0].ttl <= 4500);
+        assert!(
+            hits[0].ttl > 4490,
+            "TTL should be near original, got {}",
+            hits[0].ttl
+        );
     }
 }

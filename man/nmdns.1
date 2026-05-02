@@ -120,6 +120,18 @@ Period of the cache eviction sweep, in seconds.
 .B max_cache_entries \fR(integer, default: \fB4096\fR)
 Maximum number of records in the cache.
 When the limit is reached, the nearest\-to\-expiry entry is evicted.
+.TP
+.B cache_max_ttl_secs \fR(integer, default: no cap)
+Cap the TTL of every cached record to this many seconds.
+When \fBanswer_from_cache\fR is enabled, a malicious device on any monitored
+link can inject bogus records that propagate across all bridges; setting this
+option limits how long such a poisoned record can persist.
+Lower values reduce the attack window but also shorten the lifetime of
+legitimate long\-lived service records (DNS\-SD PTR/SRV/TXT use 4500 s by
+default).
+Leave unset to preserve original TTLs.
+Must be between 1 and 4294967295 (u32 max); a value of 0 is rejected because
+it would effectively clear the cache on every insert.
 .SS Service records
 Each \fB[[service]]\fR table publishes one DNS\-SD service instance.
 .TP

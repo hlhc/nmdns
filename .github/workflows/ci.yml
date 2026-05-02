@@ -50,6 +50,17 @@ jobs:
       - run: cargo build --all-targets --locked
       - run: cargo test --locked --all-features
 
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: rustsec/audit-action@v2
+        with:
+          deny: warnings
+
   docs:
     name: rustdoc
     runs-on: ubuntu-latest
