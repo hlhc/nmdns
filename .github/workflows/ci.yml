@@ -63,9 +63,8 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           cache-bin: false
-      - uses: rustsec/audit-action@v2
-        with:
-          deny: warnings
+      - uses: taiki-e/install-action@cargo-audit
+      - run: cargo audit --deny warnings
 
   docs:
     name: rustdoc
