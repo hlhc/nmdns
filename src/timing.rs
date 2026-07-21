@@ -55,6 +55,29 @@ impl MulticastTracker {
         self.last.lock().unwrap().insert(key, Instant::now());
     }
 
+    /// Number of tracked `(iface, record)` entries.
+    pub fn len(&self) -> usize {
+        self.last.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Drop entries whose last-multicast timestamp is older than
+    /// `min_interval`. Once that much time has elapsed the entry no longer
+    /// affects rate limiting (a missing key and a stale key both mean
+    /// "allowed"), so it is pure dead weight. Sweeping it bounds the map's
+    /// memory on a busy or hostile network, where it would otherwise grow
+    /// without limit for the daemon's lifetime.
+    pub fn prune_older_than(&self, min_interval: Duration) {
+        let now = Instant::now();
+        self.last
+            .lock()
+            .unwrap()
+            .retain(|_, t| now.duration_since(*t) < min_interval);
+    }
+
     /// True if at least `min_interval` has elapsed since this record was
     /// last multicast on `ifindex` (or it was never sent).
     pub fn allows(&self, ifindex: u32, rec: &Record, min_interval: Duration) -> bool {
@@ -161,6 +184,24 @@ mod tests {
         let r = rec([1, 2, 3, 4]);
         t.mark(1, &r);
         assert!(t.allows(1, &r, Duration::from_millis(0)));
+    }
+
+    #[test]
+    fn prune_drops_stale_entries() {
+        let t = MulticastTracker::new();
+        t.mark(1, &rec([1, 2, 3, 4]));
+        assert_eq!(t.len(), 1);
+        // With a zero interval every existing entry is already "stale".
+        t.prune_older_than(Duration::from_millis(0));
+        assert_eq!(t.len(), 0, "stale rate-limit entries must be swept");
+    }
+
+    #[test]
+    fn prune_keeps_recent_entries() {
+        let t = MulticastTracker::new();
+        t.mark(1, &rec([1, 2, 3, 4]));
+        t.prune_older_than(Duration::from_secs(3600));
+        assert_eq!(t.len(), 1, "entries within the interval must be kept");
     }
 
     #[test]

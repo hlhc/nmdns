@@ -127,6 +127,11 @@ async fn cache_evictor(state: Arc<State>) {
             _ = tick.tick() => {}
         }
         let n = state.cache.evict_expired();
+        // Sweep rate-limiter entries that have aged past the multicast interval;
+        // they no longer affect rate limiting and would otherwise leak.
+        state
+            .mc_tracker
+            .prune_older_than(timing::MIN_MULTICAST_INTERVAL);
         if n > 0 {
             tracing::debug!(evicted = n, alive = state.cache.len(), "cache swept");
         }
