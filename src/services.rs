@@ -81,25 +81,11 @@ pub fn resolve_hostname(explicit: &Option<String>) -> Name {
 /// runtime startup, where `build` would otherwise be the first to call
 /// `Name::from_str`.
 pub fn validate(hostname: &Name, services: &[ServiceConfig]) -> Result<(), ServiceError> {
-    let _ = hostname; // already validated by `resolve_hostname`
-    Name::from_str("_services._dns-sd._udp.local.").map_err(ServiceError::Internal)?;
-    for sc in services {
-        let svc_type = Name::from_str(&sc.service)
-            .map_err(|e| ServiceError::BadServiceType(sc.service.clone(), e))?;
-        // RFC 6763 §4.1.1: an instance label is an arbitrary UTF-8 string
-        // (1–63 octets), NOT a host-name-style restricted label, so use
-        // `from_labels` rather than `from_str`. Otherwise spaces, slashes,
-        // etc. would be rejected.
-        let instance_label = Name::from_labels(vec![sc.name.as_bytes()])
-            .map_err(|e| ServiceError::BadInstanceName(sc.name.clone(), e))?;
-        instance_label.append_name(&svc_type).map_err(|e| {
-            ServiceError::BadInstanceCompose(sc.name.clone(), sc.service.clone(), e)
-        })?;
-        if let Some(h) = &sc.host {
-            Name::from_str(h).map_err(|e| ServiceError::BadHost(h.clone(), e))?;
-        }
-    }
-    Ok(())
+    // Run the real construction path with no interfaces: host A/AAAA records
+    // derive from ifaces, but every service-derived `Name` is parsed
+    // regardless, so `--check` exercises exactly the same name validation the
+    // daemon performs at startup and the two cannot drift apart.
+    build(hostname.clone(), services, &[]).map(|_| ())
 }
 
 pub fn build(
