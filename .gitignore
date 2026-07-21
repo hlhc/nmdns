@@ -32,6 +32,9 @@ tmp/
 # Generated files
 result
 
+# Release artifacts and locally built packages
+/dist/
+
 # Nix binary cache signing keys
 .nix-cache-key
 *.cache-key

@@ -1,0 +1,78 @@
+# nfpm builds every Linux package format for nmdns from this one file --
+# there is no debian/, .spec, PKGBUILD or APKBUILD anywhere in this repo.
+#
+#   nfpm package -p deb -t dist/pkg/     # also: rpm, apk, archlinux
+#
+# Run it from the repo root: relative `src` paths below resolve against the
+# working directory, not against this file. Two variables must be set:
+#
+#   NMDNS_VERSION  package version, no leading "v"   (e.g. 0.2.1)
+#   NMDNS_ARCH     amd64 | arm64 -- nfpm translates to each format's spelling
+#
+# The per-architecture inputs are staged at fixed paths under dist/stage/
+# rather than passed as variables, because nfpm expands ${VAR} in `arch` and
+# `version` but not in `contents[].src` (globbing runs before expansion).
+# scripts/build-packages.sh does the staging; see it for the expected layout.
+#
+# yaml-language-server: $schema=https://nfpm.goreleaser.com/schema.json
+
+name: nmdns
+arch: ${NMDNS_ARCH}
+platform: linux
+version: ${NMDNS_VERSION}
+section: net
+priority: optional
+maintainer: Cyrus Ho <hello@cyrusho.me>
+vendor: Cyrus Ho
+homepage: https://github.com/hlhc/nmdns
+license: MIT OR Apache-2.0
+description: |
+  mDNS responder, cache, and cross-interface repeater for routers.
+  Announces local services per RFC 6762, TTL-tracks records seen on the wire,
+  and repeats IPv4 and IPv6 mDNS between interfaces so service discovery
+  (AirPlay, Chromecast, HomeKit, printers) crosses L2 segments such as a
+  trusted LAN and an IoT VLAN.
+
+contents:
+  - src: ./dist/stage/nmdns
+    dst: /usr/bin/nmdns
+    file_info:
+      mode: 0755
+
+  - src: ./dist/stage/nmdns.8.gz
+    dst: /usr/share/man/man8/nmdns.8.gz
+    file_info:
+      mode: 0644
+
+  # The daemon reads this path by default. Marked noreplace so upgrades never
+  # clobber a configured file; the unit ships disabled, so the example
+  # interface names cannot break a boot.
+  - src: ./examples/nmdns.toml
+    dst: /etc/nmdns.toml
+    type: config|noreplace
+    file_info:
+      mode: 0644
+
+  - src: ./examples/nmdns.toml
+    dst: /usr/share/doc/nmdns/nmdns.example.toml
+  - src: ./README.md
+    dst: /usr/share/doc/nmdns/README.md
+  - src: ./LICENSE-MIT
+    dst: /usr/share/licenses/nmdns/LICENSE-MIT
+  - src: ./LICENSE-APACHE
+    dst: /usr/share/licenses/nmdns/LICENSE-APACHE
+
+  # No maintainer scripts: the unit uses DynamicUser, so there is no account to
+  # create or remove. Alpine has no systemd, so there the unit is only a doc.
+  - src: ./packaging/systemd/nmdns.service
+    dst: /usr/lib/systemd/system/nmdns.service
+    packager: deb
+  - src: ./packaging/systemd/nmdns.service
+    dst: /usr/lib/systemd/system/nmdns.service
+    packager: rpm
+  - src: ./packaging/systemd/nmdns.service
+    dst: /usr/lib/systemd/system/nmdns.service
+    packager: archlinux
+  - src: ./packaging/systemd/nmdns.service
+    dst: /usr/share/doc/nmdns/nmdns.service
+    packager: apk
