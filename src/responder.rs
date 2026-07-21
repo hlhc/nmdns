@@ -213,6 +213,24 @@ fn answer_uniqueness(answers: &[Record]) -> (bool, bool) {
     (all_unique, any_unique)
 }
 
+/// Choose the randomized-response delay class for a query (RFC 6762 §6). The
+/// zero-delay `UniqueAnswer` fast path is reserved for single-question queries
+/// answered entirely with records we own outright (cache-flush set); records
+/// relayed from cache have their cache-flush bit cleared, so they correctly
+/// fall through to the jittered `Shared` class.
+fn classify_delay(msg: &Message, answers: &[Record], probe_defense: bool) -> DelayClass {
+    let (all_unique, any_unique) = answer_uniqueness(answers);
+    if probe_defense {
+        DelayClass::ProbeDefense
+    } else if msg.metadata.truncation {
+        DelayClass::Truncated
+    } else if msg.queries.len() == 1 && all_unique && any_unique {
+        DelayClass::UniqueAnswer
+    } else {
+        DelayClass::Shared
+    }
+}
+
 /// Inspect a parsed query message; respond on the iface it arrived on,
 /// honouring randomized response delays and per-record rate limiting.
 pub async fn handle_query(
@@ -241,22 +259,13 @@ pub async fn handle_query(
     }
 
     let mut additionals = cached_additionals(state, &answers, arrival);
-    let (all_unique, any_unique) = answer_uniqueness(&answers);
 
     // RFC 6762 §8.1/§8.2: a probe arrives as a query with the proposed
     // records in the Authority Section. Defenders MUST answer immediately.
     let unique_records = pub_records.unique_for_iface(arrival);
     let probe_defense = is_probe_for_us(msg, &unique_records);
 
-    let class = if probe_defense {
-        DelayClass::ProbeDefense
-    } else if msg.metadata.truncation {
-        DelayClass::Truncated
-    } else if msg.queries.len() == 1 && all_unique && any_unique {
-        DelayClass::UniqueAnswer
-    } else {
-        DelayClass::Shared
-    };
+    let class = classify_delay(msg, &answers, probe_defense);
 
     let delay = response_delay(class);
     if !delay.is_zero() {
@@ -548,6 +557,61 @@ answer_from_cache = {answer_from_cache}
         q.set_name(name).set_query_type(RecordType::A);
         plain.add_query(q);
         assert!(!is_probe_for_us(&plain, &[unique]));
+    }
+
+    #[test]
+    fn cache_relayed_answers_clear_cache_flush_bit() {
+        let trusted = fake_iface("trusted", [192, 168, 10, 1], 10);
+        let iot = fake_iface("iot", [192, 168, 20, 1], 20);
+        let state = test_state(vec![trusted.clone(), iot.clone()], true);
+        let published = Published {
+            hostname: Name::from_str("router.local.").unwrap(),
+            host_a: Vec::new(),
+            host_aaaa: Vec::new(),
+            services: Vec::new(),
+        };
+        // A record learned from a peer that owns it (cache-flush set).
+        let mut owned_by_peer = Record::from_rdata(
+            Name::from_str("printer.local.").unwrap(),
+            120,
+            RData::A(A(Ipv4Addr::new(192, 168, 20, 50))),
+        );
+        owned_by_peer.mdns_cache_flush = true;
+        state.cache.insert_from(owned_by_peer, Some(iot.ifindex));
+
+        let msg = query("printer.local.", RecordType::A);
+        let answers = candidate_answers(&state, &msg, &trusted, &published);
+        assert_eq!(answers.len(), 1);
+        assert!(
+            !answers[0].mdns_cache_flush,
+            "a relayed cache record must not assert ownership on another link"
+        );
+    }
+
+    #[test]
+    fn cache_relayed_single_answer_is_jittered_not_zero_delay() {
+        let name = Name::from_str("printer.local.").unwrap();
+        let msg = query("printer.local.", RecordType::A);
+
+        // Single-question answer we do NOT own (cache-flush cleared): must use
+        // the Shared 20-120ms jitter, not the zero-delay UniqueAnswer path.
+        let relayed = vec![Record::from_rdata(
+            name.clone(),
+            120,
+            RData::A(A(Ipv4Addr::new(1, 2, 3, 4))),
+        )];
+        assert!(matches!(
+            classify_delay(&msg, &relayed, false),
+            DelayClass::Shared
+        ));
+
+        // An owned unique record (cache-flush set) still takes the fast path.
+        let mut owned = relayed.clone();
+        owned[0].mdns_cache_flush = true;
+        assert!(matches!(
+            classify_delay(&msg, &owned, false),
+            DelayClass::UniqueAnswer
+        ));
     }
 
     #[test]

@@ -193,15 +193,23 @@ impl Cache {
 
     /// Snapshot live records for `name`/`rtype` that were learned on a
     /// different interface than `arrival_ifindex`.
+    ///
+    /// These records are relayed onto another link, so the cache-flush bit is
+    /// cleared: nmdns does not own them and must not instruct receivers to
+    /// flush the true owner's records (RFC 6762 §10.2).
     pub fn lookup_from_other_ifaces(
         &self,
         name: &Name,
         rtype: RecordType,
         arrival_ifindex: u32,
     ) -> Vec<Record> {
-        self.lookup_inner(name, rtype, |e| {
+        let mut records = self.lookup_inner(name, rtype, |e| {
             matches!(e.source_ifindex, Some(source_ifindex) if source_ifindex != arrival_ifindex)
-        })
+        });
+        for r in &mut records {
+            r.mdns_cache_flush = false;
+        }
+        records
     }
 
     fn lookup_inner<F>(&self, name: &Name, rtype: RecordType, source_filter: F) -> Vec<Record>
