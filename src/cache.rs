@@ -110,6 +110,21 @@ impl Cache {
             };
         }
 
+        // RFC 6762 §10.2: a record with the cache-flush bit set replaces all
+        // cached records of the same (name, type, class). Purge stale siblings
+        // with different rdata; the exact-rdata match (if any) is refreshed by
+        // the normal path below.
+        if record.mdns_cache_flush {
+            let rtype = record.record_type();
+            let class = record.dns_class;
+            g.by_key.retain(|k, _| {
+                !(k.name == record.name
+                    && k.rtype == rtype
+                    && k.class == class
+                    && k.rdata != record.data)
+            });
+        }
+
         let deadline = Instant::now() + Duration::from_secs(record.ttl as u64);
 
         use std::collections::hash_map::Entry as HEntry;
@@ -346,6 +361,36 @@ mod tests {
         c.insert(rec("foo.local.", 120, [1, 2, 3, 4]));
         c.insert(rec("foo.local.", 120, [5, 6, 7, 8]));
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn cache_flush_replaces_stale_rdata() {
+        // RFC 6762 §10.2: a record with the cache-flush bit set replaces all
+        // prior records of the same (name, type, class), even with different
+        // rdata — an address renumber must not leave the dead address behind.
+        let c = Cache::new();
+        let mut old = rec("printer.local.", 120, [192, 168, 20, 50]);
+        old.mdns_cache_flush = true;
+        c.insert(old);
+        let mut new = rec("printer.local.", 120, [192, 168, 20, 60]);
+        new.mdns_cache_flush = true;
+        c.insert(new);
+
+        let hits = c.lookup(&Name::from_str("printer.local.").unwrap(), RecordType::A);
+        assert_eq!(hits.len(), 1, "stale address must be flushed");
+        assert!(
+            matches!(&hits[0].data, RData::A(A(a)) if *a == Ipv4Addr::new(192, 168, 20, 60)),
+            "only the new address remains"
+        );
+    }
+
+    #[test]
+    fn cache_flush_does_not_purge_shared_records() {
+        // Shared records (cache-flush bit NOT set, e.g. PTR) stay additive.
+        let c = Cache::new();
+        c.insert(rec("foo.local.", 120, [1, 2, 3, 4]));
+        c.insert(rec("foo.local.", 120, [5, 6, 7, 8]));
+        assert_eq!(c.len(), 2, "non-cache-flush records must not purge siblings");
     }
 
     #[test]
