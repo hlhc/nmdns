@@ -53,6 +53,34 @@ to publish) or re-multicasts the frame onto the other link.
 
 ## Install
 
+### Prebuilt packages
+
+Every tagged release attaches `deb`, `rpm`, `apk` and Arch packages for
+x86_64 and aarch64, plus plain tarballs, to the
+[releases page](https://github.com/hlhc/nmdns/releases). The binaries are
+statically linked against musl, so one package works across distribution
+releases.
+
+```sh
+sudo apt install ./nmdns_<version>_amd64.deb              # Debian, Ubuntu
+sudo dnf install ./nmdns-<version>-1.x86_64.rpm           # Fedora, RHEL, openSUSE
+sudo pacman -U ./nmdns-<version>-1-x86_64.pkg.tar.zst     # Arch
+sudo apk add --allow-untrusted ./nmdns-<version>_x86_64.apk  # Alpine
+```
+
+The packages install the binary to `/usr/bin/nmdns`, the man page to
+section 8, and an example config to `/etc/nmdns.toml` — marked so upgrades
+never overwrite your edits. Edit it, then start the daemon:
+
+```sh
+sudo systemctl enable --now nmdns
+```
+
+The bundled unit runs nmdns under a `DynamicUser` with only
+`CAP_NET_BIND_SERVICE` and `CAP_NET_RAW`. Alpine has no systemd, so there the
+unit ships as documentation under `/usr/share/doc/nmdns/` and you supply your
+own OpenRC script.
+
 ### From source
 
 ```sh
@@ -96,9 +124,10 @@ The flake also exposes `nixosModules.default` (see
 
 `nmdns` must start with permission to bind UDP port 5353 and use
 `SO_BINDTODEVICE` — root, or an unprivileged user holding
-`CAP_NET_BIND_SERVICE` and `CAP_NET_RAW` (the included NixOS module
-and systemd unit run the daemon under an unprivileged `nmdns` user
-with ambient capabilities; no in-process privilege drop is performed).
+`CAP_NET_BIND_SERVICE` and `CAP_NET_RAW`. No in-process privilege drop is
+performed, so something else has to arrange this: the NixOS module runs the
+daemon as a dedicated `nmdns` user, and the unit shipped in the deb, rpm and
+Arch packages uses `DynamicUser`. Both grant the two capabilities as ambient.
 
 ## Usage
 
