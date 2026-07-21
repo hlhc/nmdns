@@ -185,6 +185,12 @@ async fn main_loop(
 async fn handle_datagram(state: &Arc<State>, published: &Arc<services::Published>, pkt: Datagram) {
     let from = pkt.source.ip();
 
+    // RFC 6762 §6/§11: ignore datagrams whose source UDP port is not 5353.
+    if !is_mdns_source(&pkt.source) {
+        tracing::trace!(src = %pkt.source, "ignoring datagram from non-5353 source port");
+        return;
+    }
+
     // Loopback prevention.
     if state.ifaces.iter().any(|i| i.has_addr(from)) {
         return;
@@ -296,6 +302,14 @@ fn log_query(state: &State, msg: &Message, pkt: &Datagram, recv_idx: Option<usiz
     );
 }
 
+/// RFC 6762 §6/§11: a conformant mDNS node sends from UDP port 5353. Datagrams
+/// from any other source port are ignored (not cached, answered, or repeated),
+/// closing an injection vector where a unicast packet from an ephemeral port
+/// poisons the cache or is reflected onto every monitored link.
+fn is_mdns_source(source: &std::net::SocketAddr) -> bool {
+    source.port() == iface::MDNS_PORT
+}
+
 fn log_response(state: &State, msg: &Message, pkt: &Datagram, recv_idx: Option<usize>) {
     let iface = recv_idx
         .map(|i| state.ifaces[i].name.as_str())
@@ -328,4 +342,23 @@ fn log_response(state: &State, msg: &Message, pkt: &Datagram, recv_idx: Option<u
         additionals = msg.additionals.len(),
         "response received",
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4};
+
+    fn source(port: u16) -> SocketAddr {
+        SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::new(10, 0, 0, 5), port))
+    }
+
+    #[test]
+    fn only_port_5353_is_accepted_as_mdns() {
+        assert!(is_mdns_source(&source(5353)));
+        assert!(
+            !is_mdns_source(&source(40000)),
+            "an ephemeral source port must be rejected (RFC 6762 §6/§11)"
+        );
+    }
 }
