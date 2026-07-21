@@ -202,8 +202,8 @@ example, `cache_max_ttl_secs = 300` limits even a DNS-SD service record
 (whose default TTL is 4500 s / 75 min) to 5 minutes. This is a security
 trade-off: lower caps reduce the poisoning window but also shorten the
 lifetime of legitimate long-lived records. Values must be between 1 and
-4294967295; a value of 0 is rejected because it would clear the cache on every
-insert.
+4294967295; `0` (or leaving the key unset) means "no cap" and preserves
+original TTLs.
 
 ## NixOS module
 

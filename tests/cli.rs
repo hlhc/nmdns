@@ -399,7 +399,8 @@ whitelist  = ["fe80::/129"]
 }
 
 #[test]
-fn cache_max_ttl_secs_zero_rejected() {
+fn cache_max_ttl_secs_zero_accepted_as_no_cap() {
+    // examples/nmdns.toml documents 0 as "no cap"; --check must accept it.
     let f = write_config(
         r#"
 interfaces = ["eth0"]
@@ -411,9 +412,8 @@ cache_max_ttl_secs = 0
         .arg(f.path())
         .arg("--check")
         .assert()
-        .failure()
-        .code(exit_code::CONFIG)
-        .stderr(predicate::str::contains("cache_max_ttl_secs"));
+        .success()
+        .code(exit_code::OK);
 }
 
 #[test]

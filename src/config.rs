@@ -238,14 +238,18 @@ impl Resolved {
             .iter()
             .map(|s| parse_subnet(s))
             .collect::<Result<_, _>>()?;
-        if let Some(ttl) = raw.cache_max_ttl_secs {
-            if ttl == 0 || ttl > MAX_CACHE_TTL_SECS {
+        // 0 means "no cap", identical to leaving the key unset (see
+        // examples/nmdns.toml); only an out-of-range positive value is an error.
+        let cache_max_ttl_secs = match raw.cache_max_ttl_secs {
+            None | Some(0) => None,
+            Some(ttl) if ttl > MAX_CACHE_TTL_SECS => {
                 return Err(ConfigError::BadCacheMaxTtl {
                     value: ttl,
                     max: MAX_CACHE_TTL_SECS,
                 });
             }
-        }
+            Some(ttl) => Some(ttl),
+        };
         Ok(Resolved {
             interfaces: raw.interfaces,
             repeat: raw.repeat,
@@ -255,7 +259,7 @@ impl Resolved {
             browse_interval_secs: raw.browse_interval_secs,
             cache_tick_secs: raw.cache_tick_secs,
             max_cache_entries: raw.max_cache_entries,
-            cache_max_ttl_secs: raw.cache_max_ttl_secs,
+            cache_max_ttl_secs,
             services: raw.services,
             blacklist,
             whitelist,
@@ -382,14 +386,17 @@ mod tests {
     }
 
     #[test]
-    fn config_cache_max_ttl_secs_rejects_zero() {
+    fn config_cache_max_ttl_secs_zero_means_no_cap() {
+        // examples/nmdns.toml documents "Set to 0 or leave unset to preserve
+        // original TTLs", so 0 must parse to None (no cap), not error.
         let r = Resolved::parse(
             r#"
             interfaces = ["eth0"]
             cache_max_ttl_secs = 0
             "#,
-        );
-        assert!(matches!(r, Err(ConfigError::BadCacheMaxTtl { .. })));
+        )
+        .unwrap();
+        assert!(r.cache_max_ttl_secs.is_none());
     }
 
     #[test]

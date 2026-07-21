@@ -129,7 +129,7 @@ option limits how long such a poisoned record can persist.
 Lower values reduce the attack window but also shorten the lifetime of
 legitimate long\-lived service records (DNS\-SD PTR/SRV/TXT use 4500 s by
 default).
-Leave unset to preserve original TTLs.
+Leave unset or set to 0 to preserve original TTLs (no cap).
 Must be between 1 and 4294967295 (u32 max); a value of 0 is rejected because
 it would effectively clear the cache on every insert.
 .SS Service records
