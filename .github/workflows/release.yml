@@ -28,17 +28,20 @@ jobs:
         with:
           fetch-depth: 0
       - id: resolve
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
         run: |
-          if [ -n "${{ inputs.tag }}" ]; then
-            echo "tag=${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          if [ -n "$INPUT_TAG" ]; then
+            echo "tag=${INPUT_TAG}" >> "$GITHUB_OUTPUT"
           else
             echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
           fi
       - name: Create release
         env:
           GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.resolve.outputs.tag }}
         run: |
-          tag="${{ steps.resolve.outputs.tag }}"
+          tag="$TAG"
           if ! gh release view "$tag" >/dev/null 2>&1; then
             gh release create "$tag" \
               --title "$tag" \
@@ -98,8 +101,10 @@ jobs:
       - name: Package
         id: package
         shell: bash
+        env:
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          tag="${{ needs.create-release.outputs.tag }}"
+          tag="$TAG"
           name="nmdns-${tag}-${{ matrix.target }}"
           staging="dist/${name}"
           mkdir -p "${staging}"
@@ -107,8 +112,10 @@ jobs:
           cp README.md LICENSE-APACHE LICENSE-MIT "${staging}/"
           cp -r man "${staging}/"
           cp examples/nmdns.toml "${staging}/nmdns.example.toml"
-          tar -C dist -czf "${name}.tar.gz" "${name}"
-          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          # Checksum from inside dist/ so the file records a bare filename and
+          # `sha256sum -c` works wherever the asset is downloaded.
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
 
       - uses: actions/upload-artifact@v7
         with:
@@ -146,15 +153,17 @@ jobs:
       - run: nix build .#nmdns --print-build-logs
       - name: Package nix artifact
         shell: bash
+        env:
+          TAG: ${{ needs.create-release.outputs.tag }}
         run: |
-          tag="${{ needs.create-release.outputs.tag }}"
+          tag="$TAG"
           name="nmdns-${tag}-${{ matrix.system }}"
           staging="dist/${name}"
           mkdir -p "${staging}"
           cp -r result/bin "${staging}/"
           cp -r result/share "${staging}/" 2>/dev/null || true
-          tar -C dist -czf "${name}.tar.gz" "${name}"
-          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          tar -C dist -czf "dist/${name}.tar.gz" "${name}"
+          (cd dist && sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256")
 
       - uses: actions/upload-artifact@v7
         with:
@@ -164,9 +173,75 @@ jobs:
             dist/*.sha256
           retention-days: 1
 
+  package-linux:
+    name: Linux packages (deb, rpm, apk, arch)
+    needs: [create-release, build-binaries]
+    runs-on: ubuntu-latest
+    env:
+      # Pinned deliberately; bump after verifying the new release locally.
+      NFPM_VERSION: "2.47.0"
+      TAG: ${{ needs.create-release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Download musl binaries
+        uses: actions/download-artifact@v8
+        with:
+          pattern: "*-musl-assets"
+          path: artifacts
+          merge-multiple: true
+
+      - name: Install nfpm
+        run: |
+          set -euo pipefail
+          url="https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}/nfpm_${NFPM_VERSION}_Linux_x86_64.tar.gz"
+          curl -fsSL "$url" -o nfpm.tar.gz
+          tar -xzf nfpm.tar.gz nfpm
+          sudo install -m 0755 nfpm /usr/local/bin/nfpm
+          nfpm --version
+
+      - name: Build packages
+        shell: bash
+        run: |
+          set -euo pipefail
+          version="${TAG#v}"
+          for arch in amd64 arm64; do
+            case "$arch" in
+              amd64) triple="x86_64-unknown-linux-musl" ;;
+              arm64) triple="aarch64-unknown-linux-musl" ;;
+            esac
+            # Static musl builds: one package per format works across distro
+            # releases, and Alpine needs musl anyway.
+            tar -xzf "artifacts/nmdns-${TAG}-${triple}.tar.gz"
+            scripts/build-packages.sh \
+              --version "$version" \
+              --arch "$arch" \
+              --binary "nmdns-${TAG}-${triple}/nmdns"
+          done
+          cd dist/pkg
+          for f in *; do sha256sum "$f" > "${f}.sha256"; done
+          ls -l
+
+      - name: Smoke test the deb
+        run: |
+          docker run --rm -v "$PWD/dist/pkg:/pkg:ro" debian:stable bash -eux -c '
+            apt-get update -qq
+            apt-get install -yqq /pkg/nmdns_*_amd64.deb
+            nmdns --help
+            nmdns -c /etc/nmdns.toml --check
+            test -f /usr/lib/systemd/system/nmdns.service
+            test -f /usr/share/man/man8/nmdns.8.gz
+          '
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: linux-packages
+          path: dist/pkg/*
+          retention-days: 1
+
   upload-release:
     name: Create GitHub release
-    needs: [create-release, build-binaries, nix-build]
+    needs: [create-release, build-binaries, nix-build, package-linux]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v8
@@ -180,4 +255,8 @@ jobs:
           generate_release_notes: true
           files: |
             dist/*.tar.gz
+            dist/*.deb
+            dist/*.rpm
+            dist/*.apk
+            dist/*.pkg.tar.zst
             dist/*.sha256
