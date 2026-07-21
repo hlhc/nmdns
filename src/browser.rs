@@ -58,8 +58,15 @@ pub async fn run(state: Arc<State>, browse: Vec<String>, interval_secs: u64) {
         }
 
         // RFC 6762 §5.2: successive intervals MUST double, capped.
-        delay = (delay * 2).min(cap);
+        delay = next_backoff(delay, cap);
     }
+}
+
+/// RFC 6762 §5.2: successive browse intervals double, capped at `cap`.
+/// Saturating multiplication so an extreme `browse_interval_secs` can never
+/// overflow `Duration` and panic the browser task.
+fn next_backoff(cur: Duration, cap: Duration) -> Duration {
+    cur.saturating_mul(2).min(cap)
 }
 
 async fn send_queries(state: &Arc<State>, names: &[Name]) {
@@ -83,5 +90,28 @@ async fn send_queries(state: &Arc<State>, names: &[Name]) {
         if let Err(e) = iface.send_mdns_all(&bytes).await {
             tracing::debug!(iface = %iface.name, err = %e, "browser: send failed");
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backoff_doubles_until_capped() {
+        let cap = Duration::from_secs(60);
+        assert_eq!(
+            next_backoff(Duration::from_secs(1), cap),
+            Duration::from_secs(2)
+        );
+        assert_eq!(next_backoff(Duration::from_secs(40), cap), cap); // 80 -> 60
+        assert_eq!(next_backoff(cap, cap), cap);
+    }
+
+    #[test]
+    fn backoff_saturates_without_panic() {
+        // A near-ceiling delay doubled must saturate, not panic the task.
+        let huge = Duration::from_secs(u64::MAX / 2 + 1);
+        assert_eq!(next_backoff(huge, Duration::MAX), Duration::MAX);
     }
 }
