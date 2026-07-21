@@ -395,7 +395,11 @@ mod tests {
         let c = Cache::new();
         c.insert(rec("foo.local.", 120, [1, 2, 3, 4]));
         c.insert(rec("foo.local.", 120, [5, 6, 7, 8]));
-        assert_eq!(c.len(), 2, "non-cache-flush records must not purge siblings");
+        assert_eq!(
+            c.len(),
+            2,
+            "non-cache-flush records must not purge siblings"
+        );
     }
 
     #[test]

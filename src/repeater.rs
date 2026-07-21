@@ -20,7 +20,11 @@ use crate::state::State;
 ///     could not attribute) is NOT reflected anywhere: blindly forwarding it to
 ///     every interface would inject off-link traffic and, for a source that is
 ///     actually on-link, echo the packet back onto its own segment.
-pub fn forward_targets(recv_idx: Option<usize>, source: IpAddr, ifaces: &[Arc<Iface>]) -> Vec<usize> {
+pub fn forward_targets(
+    recv_idx: Option<usize>,
+    source: IpAddr,
+    ifaces: &[Arc<Iface>],
+) -> Vec<usize> {
     match recv_idx {
         Some(i) => (0..ifaces.len()).filter(|&j| j != i).collect(),
         None => {
