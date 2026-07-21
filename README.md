@@ -8,7 +8,7 @@ segments — routers, gateways, hypervisors, lab servers, container hosts,
 or anything else with more than one network interface.
 
 Inspired by [Apple's `mdnsd`](https://github.com/apple-oss-distributions/mDNSResponder/)
-and [OpenWrt's `umdns`](https://github.com/openwrt/mdnsd). Built in Rust on top of [tokio](https://tokio.rs)
+and [OpenWrt's `umdns`](https://git.openwrt.org/?p=project/mdnsd.git;a=summary). Built in Rust on top of [tokio](https://tokio.rs)
 and [hickory-proto](https://crates.io/crates/hickory-proto).
 
 > mDNS uses link-local multicast (TTL 1), so without a caching
