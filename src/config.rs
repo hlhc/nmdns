@@ -13,6 +13,8 @@ use std::path::{Path, PathBuf};
 use serde::Deserialize;
 use thiserror::Error;
 
+use crate::iface::ipv6_net;
+
 /// Maximum allowed value for `cache_max_ttl_secs`.
 /// DNS TTL is a 32-bit unsigned integer (RFC 2181 §5), so the cap must
 /// fit in `u32`.
@@ -176,16 +178,6 @@ pub fn parse_subnet(s: &str) -> Result<Subnet, ConfigError> {
             net,
         })
     }
-}
-
-fn ipv6_net(addr: Ipv6Addr, prefix_len: u8) -> Ipv6Addr {
-    let addr = u128::from_be_bytes(addr.octets());
-    let mask = if prefix_len == 0 {
-        0
-    } else {
-        u128::MAX << (128 - prefix_len)
-    };
-    Ipv6Addr::from(addr & mask)
 }
 
 /// Validated runtime configuration.
