@@ -283,6 +283,13 @@ pub async fn handle_query(
     };
     let ifindex = arrival.ifindex;
     answers.retain(|r| state.mc_tracker.check_and_mark(ifindex, r, min_iv));
+    // If every answer was rate-limited away, no response goes out
+    // (build_response yields None on empty answers), so do not mark the
+    // additionals as sent — that would wrongly suppress a later direct query
+    // for a record that never went on-wire.
+    if answers.is_empty() {
+        return;
+    }
     additionals.retain(|r| state.mc_tracker.check_and_mark(ifindex, r, min_iv));
 
     let bytes = match build_response(msg.metadata.id, &answers, &additionals) {
@@ -557,6 +564,76 @@ answer_from_cache = {answer_from_cache}
         q.set_name(name).set_query_type(RecordType::A);
         plain.add_query(q);
         assert!(!is_probe_for_us(&plain, &[unique]));
+    }
+
+    #[test]
+    fn suppressed_response_does_not_mark_additionals_as_sent() {
+        // End-to-end through handle_query: check_and_mark stamped every
+        // candidate record before the response was built. When the only answer
+        // is rate-limited away, the response is not sent (build_response ->
+        // None), yet its cached additionals were already marked — so a later
+        // direct query for one of them is wrongly suppressed for a full
+        // interval although it never went on-wire.
+        let trusted = fake_iface("trusted", [192, 168, 10, 1], 10);
+        let iot = fake_iface("iot", [192, 168, 20, 1], 20);
+        let state = test_state(vec![trusted.clone(), iot.clone()], true);
+        let published = Published {
+            hostname: Name::from_str("router.local.").unwrap(),
+            host_a: Vec::new(),
+            host_aaaa: Vec::new(),
+            services: Vec::new(),
+        };
+
+        let service_type = Name::from_str("_ipp._tcp.local.").unwrap();
+        let instance = Name::from_str("Office-Printer._ipp._tcp.local.").unwrap();
+        let target = Name::from_str("printer.local.").unwrap();
+
+        let ptr = Record::from_rdata(service_type, 4500, RData::PTR(PTR(instance.clone())));
+        let srv = Record::from_rdata(
+            instance.clone(),
+            120,
+            RData::SRV(SRV::new(0, 0, 631, target.clone())),
+        );
+        state.cache.insert_from(ptr.clone(), Some(iot.ifindex));
+        state.cache.insert_from(srv.clone(), Some(iot.ifindex));
+        state.cache.insert_from(
+            Record::from_rdata(
+                instance,
+                4500,
+                RData::TXT(TXT::new(vec!["rp=ipp/print".into()])),
+            ),
+            Some(iot.ifindex),
+        );
+        state.cache.insert_from(
+            Record::from_rdata(target, 120, RData::A(A(Ipv4Addr::new(192, 168, 20, 50)))),
+            Some(iot.ifindex),
+        );
+
+        // Pre-mark ONLY the PTR answer as recently multicast on the arrival
+        // iface, so it is rate-limited to empty while the additionals stay fresh.
+        state.mc_tracker.mark(trusted.ifindex, &ptr);
+
+        let msg = query("_ipp._tcp.local.", RecordType::PTR);
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap();
+        rt.block_on(handle_query(
+            &state,
+            &msg,
+            &trusted,
+            IpFamily::V4,
+            &published,
+        ));
+
+        // The SRV additional never went on-wire (the whole response was
+        // suppressed), so it must still be allowed — i.e. NOT marked as sent.
+        assert!(
+            state
+                .mc_tracker
+                .check_and_mark(trusted.ifindex, &srv, MIN_MULTICAST_INTERVAL),
+            "a cached additional must not be marked as sent when the response is suppressed"
+        );
     }
 
     #[test]
