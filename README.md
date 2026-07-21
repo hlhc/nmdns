@@ -7,8 +7,8 @@ An mDNS / DNS-SD daemon for Linux hosts that bridge multiple link-local
 segments — routers, gateways, hypervisors, lab servers, container hosts,
 or anything else with more than one network interface.
 
-Inspired by [Apple's `mdnsd`](https://opensource.apple.com/source/mDNSResponder/)
-and OpenWrt's `umdns`. Built in Rust on top of [tokio](https://tokio.rs)
+Inspired by [Apple's `mdnsd`](https://github.com/apple-oss-distributions/mDNSResponder/)
+and [OpenWrt's `umdns`](https://github.com/openwrt/mdnsd). Built in Rust on top of [tokio](https://tokio.rs)
 and [hickory-proto](https://crates.io/crates/hickory-proto).
 
 > mDNS uses link-local multicast (TTL 1), so without a caching
