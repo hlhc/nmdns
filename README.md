@@ -58,7 +58,7 @@ to publish) or re-multicasts the frame onto the other link.
 ```sh
 cargo build --release
 sudo install -Dm755 target/release/nmdns /usr/local/bin/nmdns
-sudo install -Dm644 man/nmdns.1 /usr/local/share/man/man1/nmdns.1
+sudo install -Dm644 man/nmdns.8 /usr/local/share/man/man8/nmdns.8
 ```
 
 ### Nix flake
@@ -124,11 +124,11 @@ nmdns [-c PATH] [--check]
 | `20` | Network interface/socket setup failed. |
 | `22` | Service record construction failed during runtime startup. |
 
-A man page is included at [man/nmdns.1](man/nmdns.1):
+A man page is included at [man/nmdns.8](man/nmdns.8):
 
 ```sh
-man man/nmdns.1            # GNU man (Linux)
-mandoc man/nmdns.1         # mandoc (BSD / macOS)
+man man/nmdns.8            # GNU man (Linux)
+mandoc man/nmdns.8         # mandoc (BSD / macOS)
 ```
 
 ## Configuration

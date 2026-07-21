@@ -40,5 +40,5 @@ touches and how the change preserves conformance. Otherwise write "None".
 - [ ] I have read [`README.md`](../README.md) and the project license.
 - [ ] My changes generate no new warnings.
 - [ ] I have added or updated tests covering my changes.
-- [ ] I have updated the man page (`man/nmdns.1`) if user-visible behaviour changed.
+- [ ] I have updated the man page (`man/nmdns.8`) if user-visible behaviour changed.
 - [ ] I have updated the example config (`examples/nmdns.toml`) if config keys changed.

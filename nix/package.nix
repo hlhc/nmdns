@@ -33,7 +33,7 @@ effectiveRustPlatform.buildRustPackage {
   # validates config and exits without binding anything.
 
   postInstall = ''
-    installManPage man/nmdns.1
+    installManPage man/nmdns.8
   '';
 
   meta = with lib; {

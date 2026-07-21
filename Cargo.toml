@@ -4,6 +4,12 @@ version = "0.2.1"
 edition = "2021"
 description = "mDNS responder, cache, and cross-interface repeater for routers"
 license = "MIT OR Apache-2.0"
+authors = ["Cyrus Ho <hello@cyrusho.me>"]
+repository = "https://github.com/hlhc/nmdns"
+homepage = "https://github.com/hlhc/nmdns"
+readme = "README.md"
+keywords = ["mdns", "dns-sd", "bonjour", "zeroconf", "repeater"]
+categories = ["network-programming", "command-line-utilities"]
 
 [dependencies]
 tokio = { version = "1.52", features = [
