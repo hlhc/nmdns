@@ -139,22 +139,19 @@ impl Cache {
         }
 
         if g.by_key.len() >= g.max_entries {
-            // Evict the soonest-to-expire entry, but only if it's "close
-            // enough" to expiry that we'd have evicted it within the next
-            // few seconds anyway. (A full LRU would need an extra list;
-            // deadline-based eviction is good enough for a bounded mDNS
-            // cache.)
-            let now = Instant::now();
+            // At capacity, evict the soonest-to-expire entry to admit the new
+            // record. Evicting unconditionally (rather than only when the
+            // victim is near expiry) keeps the cache bounded without letting a
+            // flood of long-TTL records wedge it shut. (A full LRU would need
+            // an extra list; deadline-based eviction is good enough for a
+            // bounded mDNS cache.)
             let victim = g
                 .by_key
                 .iter()
                 .min_by_key(|(_, e)| e.deadline)
-                .map(|(k, e)| (k.clone(), e.deadline));
-            match victim {
-                Some((k, d)) if d <= now + Duration::from_secs(1) => {
-                    g.by_key.remove(&k);
-                }
-                _ => return InsertOutcome::Rejected,
+                .map(|(k, _)| k.clone());
+            if let Some(k) = victim {
+                g.by_key.remove(&k);
             }
         }
 
@@ -412,11 +409,38 @@ mod tests {
         let c = Cache::with_capacity(2);
         c.insert(rec("a.local.", 600, [1, 0, 0, 1]));
         c.insert(rec("b.local.", 600, [1, 0, 0, 2]));
+        // At capacity, a new record evicts the soonest-to-expire entry rather
+        // than being rejected, so the cache stays bounded but keeps accepting.
         assert_eq!(
             c.insert(rec("c.local.", 600, [1, 0, 0, 3])),
-            InsertOutcome::Rejected
+            InsertOutcome::Inserted
         );
         assert_eq!(c.len(), 2);
+    }
+
+    #[test]
+    fn full_cache_evicts_soonest_to_expire_not_wedge() {
+        // A full cache of long-TTL records must not lock out new inserts (a
+        // hostile-flood DoS): the soonest-to-expire entry is evicted to admit
+        // a newer record.
+        let c = Cache::with_capacity(2);
+        c.insert(rec("soon.local.", 30, [1, 0, 0, 1])); // soonest deadline
+        c.insert(rec("later.local.", 600, [1, 0, 0, 2]));
+        assert_eq!(
+            c.insert(rec("new.local.", 600, [1, 0, 0, 3])),
+            InsertOutcome::Inserted
+        );
+        assert_eq!(c.len(), 2);
+        assert!(
+            c.lookup(&Name::from_str("soon.local.").unwrap(), RecordType::A)
+                .is_empty(),
+            "soonest-to-expire entry is the eviction victim"
+        );
+        assert!(
+            !c.lookup(&Name::from_str("new.local.").unwrap(), RecordType::A)
+                .is_empty(),
+            "the new record was admitted"
+        );
     }
 
     #[test]
