@@ -247,7 +247,7 @@ impl Default for Cache {
 mod tests {
     use super::*;
     use hickory_proto::rr::rdata::{A, AAAA};
-    use hickory_proto::rr::{RData, RecordType};
+    use hickory_proto::rr::{DNSClass, RData, RecordType};
     use std::net::{Ipv4Addr, Ipv6Addr};
     use std::str::FromStr;
 
@@ -319,6 +319,24 @@ mod tests {
         assert_eq!(
             c.insert(rec("foo.local.", 0, [9, 9, 9, 9])),
             InsertOutcome::GoodbyeNoOp
+        );
+    }
+
+    #[test]
+    fn dns_class_is_part_of_key() {
+        // A record differing only in DNS class must not collide with (and
+        // overwrite) the legitimate class-IN entry. DNS record identity is
+        // (name, type, class, rdata); the cache key must include class.
+        let c = Cache::new();
+        c.insert(rec("foo.local.", 120, [1, 2, 3, 4])); // class IN by default
+        let mut other = rec("foo.local.", 120, [1, 2, 3, 4]);
+        other.dns_class = DNSClass::ANY;
+        c.insert(other);
+        assert_eq!(c.len(), 2, "class-ANY record must not overwrite class-IN");
+        let hits = c.lookup(&Name::from_str("foo.local.").unwrap(), RecordType::A);
+        assert!(
+            hits.iter().any(|r| r.dns_class == DNSClass::IN),
+            "the legitimate class-IN record must survive"
         );
     }
 

@@ -8,12 +8,13 @@
 //! tied us to an unstable Debug format and could silently break across
 //! `hickory-proto` versions.)
 
-use hickory_proto::rr::{Name, RData, Record, RecordType};
+use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct RecordKey {
     pub name: Name,
     pub rtype: RecordType,
+    pub class: DNSClass,
     pub rdata: RData,
 }
 
@@ -22,6 +23,7 @@ impl RecordKey {
         Self {
             name: rec.name.clone(),
             rtype: rec.record_type(),
+            class: rec.dns_class,
             rdata: rec.data.clone(),
         }
     }
