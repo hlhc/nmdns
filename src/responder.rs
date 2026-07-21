@@ -11,7 +11,7 @@ use hickory_proto::rr::{DNSClass, Name, RData, Record, RecordType};
 use tokio::time::sleep;
 
 use crate::iface::{Iface, IpFamily};
-use crate::record_key::{rdata_eq, RecordKey};
+use crate::record_key::RecordKey;
 use crate::services::Published;
 use crate::state::State;
 use crate::timing::{
@@ -64,7 +64,7 @@ pub fn apply_known_answers(answers: &mut Vec<Record>, query_msg: &Message) {
         !query_msg.answers.iter().any(|known| {
             known.name == ans.name
                 && known.record_type() == ans.record_type()
-                && rdata_eq(&known.data, &ans.data)
+                && known.data == ans.data
                 && known.ttl.saturating_mul(2) >= ans.ttl
         })
     });

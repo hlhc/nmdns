@@ -28,8 +28,3 @@ impl RecordKey {
         }
     }
 }
-
-/// True when two rdata values compare equal.
-pub fn rdata_eq(a: &RData, b: &RData) -> bool {
-    a == b
-}

@@ -32,10 +32,6 @@ pub const MDNS_SOCKADDR_V4: SocketAddrV4 = SocketAddrV4::new(MDNS_ADDR_V4, MDNS_
 pub const MDNS_SOCKADDR_V6: SocketAddrV6 = SocketAddrV6::new(MDNS_ADDR_V6, MDNS_PORT, 0, 0);
 pub const MAX_PACKET: usize = 9000; // jumbo-frame safe
 
-/// Backward-compatible names for the IPv4 mDNS address and socket address.
-pub const MDNS_ADDR: Ipv4Addr = MDNS_ADDR_V4;
-pub const MDNS_SOCKADDR: SocketAddrV4 = MDNS_SOCKADDR_V4;
-
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum IpFamily {
     V4,
