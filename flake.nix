@@ -25,11 +25,11 @@
           };
         in
         {
-          nmdns = final.callPackage ./nix/package.nix { inherit rustPlatform; };
+          nmdns = final.callPackage ./packaging/nix/package.nix { inherit rustPlatform; };
         };
 
-      nixosModules.default = ./nix/module.nix;
-      nixosModules.nmdns = ./nix/module.nix;
+      nixosModules.default = ./packaging/nix/module.nix;
+      nixosModules.nmdns = ./packaging/nix/module.nix;
     } // flake-utils.lib.eachSystem systems (system:
       let
         pkgs = import nixpkgs {
