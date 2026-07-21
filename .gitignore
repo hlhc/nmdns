@@ -35,6 +35,9 @@ result
 # Release artifacts and locally built packages
 /dist/
 
+# Local planning notes
+/tasks/
+
 # Nix binary cache signing keys
 .nix-cache-key
 *.cache-key
