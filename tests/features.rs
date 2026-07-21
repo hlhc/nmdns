@@ -695,16 +695,61 @@ fn repeater_identify_recv_iface_via_subnet_fallback() {
 }
 
 #[test]
-fn repeater_identify_recv_iface_via_ipv6_subnet_fallback() {
+fn repeater_identify_recv_iface_ipv6_link_local_requires_pktinfo() {
+    // Every interface's link-local address is in fe80::/64, so a subnet match
+    // cannot disambiguate the arrival link for a link-local source — without a
+    // PKTINFO ifindex we must NOT guess (mis-attributing to the first iface
+    // enables cross-link reflection). With a matching ifindex it resolves.
     let ip6_a = Ipv6Addr::from(0xfe80_0000_0000_0000_0000_0000_0000_0001u128);
-    let ip6_b = Ipv6Addr::from(0xfe80_0000_0000_0001_0000_0000_0000_0001u128);
+    let ip6_b = Ipv6Addr::from(0xfe80_0000_0000_0000_0000_0000_0000_0002u128);
     let ifs = vec![
         fake_iface_v6("eth0", ip6_a, 64, 5),
         fake_iface_v6("eth1", ip6_b, 64, 7),
     ];
-    let src = Ipv6Addr::from(0xfe80_0000_0000_0001_0000_0000_0000_0050u128);
-    let pkt = datagram_v6(src, None);
-    assert_eq!(repeater::identify_recv_iface(&pkt, &ifs), Some(1));
+    let src = Ipv6Addr::from(0xfe80_0000_0000_0000_0000_0000_0000_0050u128);
+    assert!(
+        repeater::identify_recv_iface(&datagram_v6(src, None), &ifs).is_none(),
+        "link-local v6 source without PKTINFO must not be guessed"
+    );
+    assert_eq!(
+        repeater::identify_recv_iface(&datagram_v6(src, Some(7)), &ifs),
+        Some(1),
+        "PKTINFO ifindex still resolves the arrival iface"
+    );
+}
+
+#[test]
+fn repeater_forward_targets_skip_recv_iface() {
+    let ifs = vec![
+        fake_iface("eth0", [10, 0, 0, 1], [255, 255, 255, 0], 5),
+        fake_iface("eth1", [192, 168, 1, 1], [255, 255, 255, 0], 7),
+    ];
+    let src = Ipv4Addr::new(10, 0, 0, 99).into();
+    assert_eq!(repeater::forward_targets(Some(0), src, &ifs), vec![1]);
+}
+
+#[test]
+fn repeater_forward_targets_unidentified_offlink_is_empty() {
+    // Ingress unknown and the source is on no monitored subnet (e.g. an
+    // off-link unicast to :5353): do not blindly reflect to every interface.
+    let ifs = vec![
+        fake_iface("eth0", [10, 0, 0, 1], [255, 255, 255, 0], 5),
+        fake_iface("eth1", [192, 168, 1, 1], [255, 255, 255, 0], 7),
+    ];
+    let off_link = Ipv4Addr::new(8, 8, 8, 8).into();
+    assert!(repeater::forward_targets(None, off_link, &ifs).is_empty());
+}
+
+#[test]
+fn repeater_forward_targets_unidentified_onlink_skips_source_subnet() {
+    // Ingress unknown but source is on a monitored subnet: forward to the
+    // other interfaces (the legitimate subnet-fallback path).
+    let ifs = vec![
+        fake_iface("eth0", [10, 0, 0, 1], [255, 255, 255, 0], 5),
+        fake_iface("eth1", [192, 168, 1, 1], [255, 255, 255, 0], 7),
+    ];
+    let on_eth0 = Ipv4Addr::new(10, 0, 0, 50).into();
+    assert_eq!(repeater::forward_targets(None, on_eth0, &ifs), vec![1]);
 }
 
 #[test]
